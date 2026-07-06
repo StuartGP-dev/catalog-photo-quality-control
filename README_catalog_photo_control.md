@@ -36,6 +36,35 @@ $env:CATALOG_PHOTO_ANNONCES_ROOT = "C:\Users\yanis\Documents\Code\Bot-Vinted\ann
 $env:CATALOG_PHOTO_OUTPUT_ROOT = "C:\Users\yanis\Documents\Code\catalog-photo-quality-control\local\debug_catalog_photo_control"
 ```
 
+
+## Resolution des dossiers annonce
+
+La valeur passee a `--listing` reste courte et lisible. Par exemple :
+
+```text
+bijoux/O18
+```
+
+Le code teste d'abord le chemin direct :
+
+```text
+C:\Users\yanis\Documents\Code\Bot-Vinted\annonces\bijoux\O18
+```
+
+Puis il teste automatiquement le rangement par famille de reference :
+
+```text
+C:\Users\yanis\Documents\Code\Bot-Vinted\annonces\bijoux\O\O18
+```
+
+Donc meme si le premier `Test-Path` retourne `False`, la commande `--listing bijoux/O18` fonctionne tant que le dossier range dans `bijoux\O\O18` existe.
+
+Verification rapide :
+
+```powershell
+Test-Path "C:\Users\yanis\Documents\Code\Bot-Vinted\annonces\bijoux\O\O18"
+```
+
 ## Commande exemple - controle standard
 
 ```powershell
