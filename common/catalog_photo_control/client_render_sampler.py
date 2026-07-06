@@ -5,7 +5,9 @@ import csv
 import hashlib
 import html
 import json
+import os
 import sqlite3
+import time
 from datetime import datetime
 from pathlib import Path
 from random import Random
@@ -18,7 +20,9 @@ from .listing_photo_review import _safe_listing_code, find_listing_images, resol
 from .local_paths import default_annonces_root, default_output_root, describe_local_paths
 
 DB_VERSION = 1
-PIPELINE_VERSION = 1
+PIPELINE_VERSION = 2
+DEFAULT_BATCH_SAMPLES = 40
+DURATION_MODE_SAMPLES = 1_000_000
 
 PROFILES: dict[str, dict[str, tuple[float, float, float] | tuple[int, int, int]]] = {
     "natural": {
@@ -43,6 +47,17 @@ PROFILES: dict[str, dict[str, tuple[float, float, float] | tuple[int, int, int]]
         "blur": (0.0, 0.55, 0.0),
         "quality": (74, 96, 90),
     },
+    "studio_wide": {
+        "brightness": (0.84, 1.18, 1.0),
+        "contrast": (0.84, 1.20, 1.0),
+        "saturation": (0.84, 1.20, 1.0),
+        "sharpness": (0.84, 1.30, 1.0),
+        "warmth": (-0.08, 0.08, 0.0),
+        "angle": (-3.0, 3.0, 0.0),
+        "crop": (0.0, 0.050, 0.008),
+        "blur": (0.0, 0.75, 0.0),
+        "quality": (68, 96, 88),
+    },
 }
 
 
@@ -54,6 +69,10 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
 def _stable_id(data: dict[str, Any]) -> str:
     payload = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _auto_seed() -> int:
+    return int(time.time_ns() % 2_147_483_647) ^ os.getpid()
 
 
 def _db_path(output_root: Path, listing_code: str) -> Path:
@@ -75,6 +94,7 @@ def _connect_db(path: Path) -> sqlite3.Connection:
         "luma_delta REAL NOT NULL, contrast_delta REAL NOT NULL, saturation_delta REAL NOT NULL, detail_delta REAL NOT NULL, created_at TEXT NOT NULL)"
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_recipes_scope ON recipes(listing_code, profile)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_outputs_recipe ON outputs(recipe_id)")
     conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('version', ?)", (str(DB_VERSION),))
     conn.commit()
     return conn
@@ -215,7 +235,8 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 def _html(report: dict[str, Any], rows: list[dict[str, Any]]) -> str:
     lines = ["<!doctype html><html lang='fr'><head><meta charset='utf-8'><title>Render sampler</title><style>body{font-family:Arial;margin:24px}img{max-width:100%;border:1px solid #ddd}table{border-collapse:collapse;width:100%;font-size:13px}td,th{border:1px solid #ddd;padding:6px}th{background:#f5f5f5}code{background:#f7f7f7;padding:2px 4px}</style></head><body>"]
     lines.append(f"<h1>Variantes de rendu client - {html.escape(report['listing_code'])}</h1>")
-    lines.append(f"<p>Profil: <code>{html.escape(report['profile'])}</code> | Recettes: {report['summary']['recipes_executed']} | Images: {report['summary']['source_images']}</p>")
+    lines.append(f"<p>Profil: <code>{html.escape(report['profile'])}</code> | Recettes executees: {report['summary']['recipes_executed']} | Images sources: {report['summary']['source_images']}</p>")
+    lines.append(f"<p>Duree: {report['summary']['duration_seconds']:.1f}s | Lignes incluses dans ce rapport: {report['summary']['report_rows_included']} / {report['summary']['outputs_total']}</p>")
     lines.append(f"<p><img src='{html.escape(Path(report['reports']['contact_sheet']).name)}' alt='Planche avant apres'></p>")
     lines.append("<table><thead><tr><th>Recette</th><th>Image</th><th>Delta lum.</th><th>Delta cont.</th><th>Delta sat.</th><th>Delta details</th><th>Parametres</th></tr></thead><tbody>")
     for row in rows:
@@ -230,10 +251,13 @@ def run_client_render_sampler(
     annonces_root: str | Path | None = None,
     output_root: str | Path | None = None,
     profile: str = "client_wide",
-    samples: int = 40,
-    seed: int = 12345,
+    samples: int = DEFAULT_BATCH_SAMPLES,
+    seed: int | None = None,
     max_attempts: int | None = None,
     contact_sheet_rows: int = 32,
+    duration_minutes: float | None = None,
+    report_row_limit: int = 1000,
+    progress_every: int = 25,
 ) -> dict[str, Any]:
     if profile not in PROFILES:
         raise ValueError(f"Profil inconnu: {profile}")
@@ -248,16 +272,23 @@ def run_client_render_sampler(
     db_file = _db_path(local_output_root, listing_code)
     conn = _connect_db(db_file)
     known = _known_recipes(conn, listing_code, profile)
-    rng = Random(seed)
+    effective_seed = _auto_seed() if seed is None else int(seed)
+    rng = Random(effective_seed)
+    started_monotonic = time.monotonic()
+    deadline = started_monotonic + duration_minutes * 60.0 if duration_minutes and duration_minutes > 0 else None
     now = datetime.now().isoformat(timespec="seconds")
     attempts_limit = max_attempts or max(samples * 50, samples + 100)
-    attempts = skipped = 0
-    recipes: list[dict[str, Any]] = []
+    attempts = skipped = outputs_total = recipes_executed = 0
+    stop_reason = "samples_reached"
+    recipes_report: list[dict[str, Any]] = []
     rows: list[dict[str, Any]] = []
     base_metrics = {str(path): _metrics(path) for path in images}
 
     try:
-        while len(recipes) < samples and attempts < attempts_limit:
+        while recipes_executed < samples and attempts < attempts_limit:
+            if deadline is not None and time.monotonic() >= deadline:
+                stop_reason = "duration_reached"
+                break
             attempts += 1
             params = _sample_params(rng, profile)
             rid = _recipe_id(listing_code, profile, params)
@@ -265,11 +296,13 @@ def run_client_render_sampler(
                 skipped += 1
                 continue
             known.add(rid)
-            recipes.append({"recipe_id": rid, "params": params})
-            recipe_dir = output_dir / "rendered" / f"recipe_{len(recipes):04d}_{rid[:10]}"
+            recipes_executed += 1
+            if len(recipes_report) < report_row_limit:
+                recipes_report.append({"recipe_id": rid, "params": params})
+            recipe_dir = output_dir / "rendered" / f"recipe_{recipes_executed:04d}_{rid[:10]}"
             conn.execute(
                 "INSERT INTO recipes(recipe_id, listing_code, profile, params_json, seed, created_at, output_dir) VALUES(?,?,?,?,?,?,?)",
-                (rid, listing_code, profile, json.dumps(params, ensure_ascii=False, sort_keys=True), seed, now, str(output_dir)),
+                (rid, listing_code, profile, json.dumps(params, ensure_ascii=False, sort_keys=True), effective_seed, now, str(output_dir)),
             )
             for src in images:
                 out_path = recipe_dir / f"{src.stem}_{rid[:10]}.jpg"
@@ -279,15 +312,24 @@ def run_client_render_sampler(
                 delta = {key: round(after[key] - before[key], 4) for key in before}
                 oid = _stable_id({"kind": "client_render_output", "recipe_id": rid, "source_image": str(src)})
                 row = {"output_id": oid, "recipe_id": rid, "source_image": str(src), "output_path": str(out_path), "params": params, "before": before, "after": after, "delta": delta}
-                rows.append(row)
+                outputs_total += 1
+                if len(rows) < report_row_limit:
+                    rows.append(row)
                 conn.execute(
                     "INSERT OR REPLACE INTO outputs(output_id, recipe_id, source_image, output_path, luma_delta, contrast_delta, saturation_delta, detail_delta, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
                     (oid, rid, str(src), str(out_path), delta["luma"], delta["contrast"], delta["saturation"], delta["detail"], now),
                 )
             conn.commit()
+            if progress_every > 0 and recipes_executed % progress_every == 0:
+                elapsed = time.monotonic() - started_monotonic
+                print(f"progression: {recipes_executed} recettes, {outputs_total} images, {elapsed:.1f}s, skips={skipped}")
+        else:
+            if attempts >= attempts_limit and recipes_executed < samples:
+                stop_reason = "max_attempts_reached"
     finally:
         conn.close()
 
+    duration_seconds = time.monotonic() - started_monotonic
     reports = {
         "json": str(output_dir / "client_render_sampler_report.json"),
         "csv": str(output_dir / "client_render_sampler_report.csv"),
@@ -299,7 +341,7 @@ def run_client_render_sampler(
         "listing_code": listing_code,
         "listing_dir": str(listing_dir),
         "profile": profile,
-        "seed": seed,
+        "seed": effective_seed,
         "output_dir": str(output_dir),
         "database": str(db_file),
         "reports": reports,
@@ -307,13 +349,18 @@ def run_client_render_sampler(
         "summary": {
             "source_images": len(images),
             "recipes_requested": samples,
-            "recipes_executed": len(recipes),
+            "recipes_executed": recipes_executed,
             "recipes_skipped_known": skipped,
             "generation_attempts": attempts,
-            "outputs_total": len(rows),
+            "outputs_total": outputs_total,
+            "duration_minutes_requested": duration_minutes,
+            "duration_seconds": round(duration_seconds, 3),
+            "stop_reason": stop_reason,
+            "report_row_limit": report_row_limit,
+            "report_rows_included": len(rows),
         },
         "profiles": PROFILES,
-        "recipes": recipes,
+        "recipes": recipes_report,
         "outputs": rows,
     }
     _write_json(Path(reports["json"]), report)
@@ -328,21 +375,30 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--annonces-root", default=str(default_annonces_root()))
     parser.add_argument("--output-root", default=str(default_output_root()))
     parser.add_argument("--profile", choices=tuple(PROFILES), default="client_wide")
-    parser.add_argument("--samples", type=int, default=40)
-    parser.add_argument("--seed", type=int, default=12345)
+    parser.add_argument("--samples", type=int, default=None, help="Nombre de recettes a generer. Par defaut: 40, ou tres haut si --duration-minutes est fourni.")
+    parser.add_argument("--seed", type=int, default=None, help="Nombre optionnel pour reproduire exactement une suite de recettes. Omettre pour une seed automatique.")
     parser.add_argument("--max-attempts", type=int, default=None)
     parser.add_argument("--contact-sheet-rows", type=int, default=32)
+    parser.add_argument("--duration-minutes", type=float, default=None, help="Fait tourner le sampler pendant une duree cible, par exemple 120 pour deux heures.")
+    parser.add_argument("--report-row-limit", type=int, default=1000, help="Nombre maximum de lignes conservees dans les rapports JSON/CSV/HTML. La DB garde tout.")
+    parser.add_argument("--progress-every", type=int, default=25, help="Affiche une progression toutes les N recettes. 0 pour desactiver.")
     args = parser.parse_args(argv)
+    samples = args.samples
+    if samples is None:
+        samples = DURATION_MODE_SAMPLES if args.duration_minutes and args.duration_minutes > 0 else DEFAULT_BATCH_SAMPLES
     try:
         report = run_client_render_sampler(
             args.listing,
             args.annonces_root,
             args.output_root,
             args.profile,
-            max(0, args.samples),
+            max(0, samples),
             args.seed,
             args.max_attempts,
             max(1, args.contact_sheet_rows),
+            args.duration_minutes,
+            max(1, args.report_row_limit),
+            max(0, args.progress_every),
         )
     except Exception as exc:
         print(f"Erreur: {exc}")
@@ -360,6 +416,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"recettes executees: {report['summary']['recipes_executed']}")
     print(f"recettes deja connues ignorees: {report['summary']['recipes_skipped_known']}")
     print(f"images generees: {report['summary']['outputs_total']}")
+    print(f"duree effective secondes: {report['summary']['duration_seconds']}")
+    print(f"raison arret: {report['summary']['stop_reason']}")
+    print(f"lignes rapport: {report['summary']['report_rows_included']} / {report['summary']['outputs_total']}")
     return 0
 
 

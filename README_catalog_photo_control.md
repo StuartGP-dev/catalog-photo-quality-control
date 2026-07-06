@@ -119,3 +119,19 @@ Profils disponibles:
 - `natural`: retouches legeres et prudentes
 - `client_wide`: plages un peu plus larges tout en gardant un rendu naturel
 
+
+### Mode longue duree - variantes de rendu client
+
+Pour faire tourner le sampler pendant une duree cible:
+
+`powershell
+python -m common.catalog_photo_control.client_render_sampler --listing bijoux/O18 --profile client_wide --duration-minutes 120 --progress-every 50 --report-row-limit 1000 --contact-sheet-rows 120
+`
+
+Notes:
+- --duration-minutes 120 lance un run d'environ deux heures.
+- --samples peut rester omis en mode duree.
+- --seed peut rester omis: une seed automatique est utilisee.
+- La base SQLite conserve toutes les recettes et sorties.
+- --report-row-limit limite seulement les rapports JSON/CSV/HTML pour eviter des fichiers trop lourds.
+- Profil supplementaire: studio_wide, plus varie que client_wide tout en gardant un rendu catalogue naturel.
