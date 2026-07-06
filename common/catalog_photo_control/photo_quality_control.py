@@ -16,6 +16,7 @@ from .decision_margin_search import run_decision_margin_search
 from .photo_metadata import compare_photo_metadata_records
 from .photo_adjustments import generate_photo_adjustment_from_spec, list_photo_adjustment_specs
 from .listing_photo_review import _safe_listing_code, find_listing_images, resolve_listing_dir
+from .local_paths import default_annonces_root, default_output_root, describe_local_paths
 
 DB_VERSION = 3
 
@@ -202,8 +203,8 @@ def _write_debug_zip(report: dict[str, Any], output_dir: Path, summary: dict[str
     return zip_path
 
 
-def find_catalog_listing_dirs(mode: str, annonces_root: str | Path = "annonces", limit: int = 20, exclude_dir: str | Path | None = None) -> list[Path]:
-    root = Path(annonces_root) / mode
+def find_catalog_listing_dirs(mode: str, annonces_root: str | Path | None = None, limit: int = 20, exclude_dir: str | Path | None = None) -> list[Path]:
+    root = (Path(annonces_root) if annonces_root is not None else default_annonces_root()) / mode
     if not root.is_dir():
         return []
     excluded = Path(exclude_dir).resolve() if exclude_dir else None
@@ -231,7 +232,7 @@ def compare_listing_photos_pairwise(images: list[Path], sensitivity: str = "stan
     return pairs
 
 
-def compare_listing_against_catalog_set(listing_code: str, annonces_root: str | Path = "annonces", max_other_listings: int = 20, sensitivity: str = "standard") -> dict[str, Any]:
+def compare_listing_against_catalog_set(listing_code: str, annonces_root: str | Path | None = None, max_other_listings: int = 20, sensitivity: str = "standard") -> dict[str, Any]:
     listing_dir = resolve_listing_dir(listing_code, annonces_root=annonces_root)
     source_images = find_listing_images(listing_dir)
     other_dirs = find_catalog_listing_dirs(_mode(listing_code), annonces_root=annonces_root, limit=max_other_listings, exclude_dir=listing_dir)
@@ -254,12 +255,14 @@ def _planned_tests(listing_code: str, images: list[Path], preset: str, sensitivi
     return planned
 
 
-def run_reference_photo_checks(listing_code: str, annonces_root: str | Path = "annonces", output_dir: str | Path = "local/debug_catalog_photo_control", output_root: str | Path = "local/debug_catalog_photo_control", preset: str = "default", sensitivity: str = "standard", skip_known: bool = True) -> dict[str, Any]:
+def run_reference_photo_checks(listing_code: str, annonces_root: str | Path | None = None, output_dir: str | Path | None = None, output_root: str | Path | None = None, preset: str = "default", sensitivity: str = "standard", skip_known: bool = True) -> dict[str, Any]:
     listing_dir = resolve_listing_dir(listing_code, annonces_root=annonces_root)
     images = find_listing_images(listing_dir)
     comparisons: list[dict[str, Any]] = []
-    adjustments_root = Path(output_dir) / "photo_adjustments"
-    db = _load_db(output_root, listing_code)
+    local_output_root = Path(output_root) if output_root is not None else default_output_root()
+    local_output_dir = Path(output_dir) if output_dir is not None else local_output_root / _safe_listing_code(listing_code) / datetime.now().strftime("%Y%m%d_%H%M%S_reference")
+    adjustments_root = local_output_dir / "photo_adjustments"
+    db = _load_db(local_output_root, listing_code)
     known = _known_test_ids(db) if skip_known else set()
     planned = _planned_tests(listing_code, images, preset, sensitivity)
     skipped = []
@@ -276,7 +279,7 @@ def run_reference_photo_checks(listing_code: str, annonces_root: str | Path = "a
     return {"counts": dict(counts), "comparisons": comparisons, "reference_photo_cases_to_review": potential, "planned_total": len(planned), "executed_total": len(comparisons), "skipped_known_total": len(skipped), "skipped_known": skipped, "skip_known": skip_known}
 
 
-def run_catalog_pair_checks(listing_code: str, annonces_root: str | Path = "annonces", max_other_listings: int = 20, sensitivity: str = "standard") -> dict[str, Any]:
+def run_catalog_pair_checks(listing_code: str, annonces_root: str | Path | None = None, max_other_listings: int = 20, sensitivity: str = "standard") -> dict[str, Any]:
     listing_dir = resolve_listing_dir(listing_code, annonces_root=annonces_root)
     images = find_listing_images(listing_dir)
     same_listing = compare_listing_photos_pairwise(images, sensitivity=sensitivity, relation="same_listing")
@@ -398,15 +401,16 @@ def _markdown_report(report: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def run_listing_photo_quality_control(listing_code: str, annonces_root: str | Path = "annonces", output_root: str | Path = "local/debug_catalog_photo_control", preset: str = "default", sensitivity: str = "standard", max_other_listings: int = 20, keep_clear_cases: bool = False, rerun_tested: bool = False) -> dict[str, Any]:
+def run_listing_photo_quality_control(listing_code: str, annonces_root: str | Path | None = None, output_root: str | Path | None = None, preset: str = "default", sensitivity: str = "standard", max_other_listings: int = 20, keep_clear_cases: bool = False, rerun_tested: bool = False) -> dict[str, Any]:
     listing_dir = resolve_listing_dir(listing_code, annonces_root=annonces_root)
     images = find_listing_images(listing_dir)
     if not images:
         raise FileNotFoundError(f"Aucune image trouvee dans le dossier annonce: {listing_dir}")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = Path(output_root) / _safe_listing_code(listing_code) / f"{timestamp}_control"
+    local_output_root = Path(output_root) if output_root is not None else default_output_root()
+    output_dir = local_output_root / _safe_listing_code(listing_code) / f"{timestamp}_control"
     output_dir.mkdir(parents=True, exist_ok=True)
-    reference_control = run_reference_photo_checks(listing_code, annonces_root=annonces_root, output_dir=output_dir, output_root=output_root, preset=preset, sensitivity=sensitivity, skip_known=not rerun_tested)
+    reference_control = run_reference_photo_checks(listing_code, annonces_root=annonces_root, output_dir=output_dir, output_root=local_output_root, preset=preset, sensitivity=sensitivity, skip_known=not rerun_tested)
     cross_control = run_catalog_pair_checks(listing_code, annonces_root=annonces_root, max_other_listings=max_other_listings, sensitivity=sensitivity)
     exif = run_metadata_checks(listing_code, sensitivity=sensitivity)
     if keep_clear_cases:
@@ -417,8 +421,8 @@ def run_listing_photo_quality_control(listing_code: str, annonces_root: str | Pa
             if src.exists():
                 target = clear_cases_dir / src.name
                 target.write_bytes(src.read_bytes())
-    report = {"listing_code": listing_code, "listing_dir": str(listing_dir), "preset": preset, "sensitivity": sensitivity, "sensitivity_note": "wide sert a explorer les limites et peut creer plus de cas inter-annonces a revoir." if sensitivity == "wide" else "standard correspond au comportement prudent par defaut.", "output_dir": str(output_dir), "reports": {"json": str(output_dir / "photo_quality_control_report.json"), "markdown": str(output_dir / "photo_quality_control_report.md")}, "summary": {"original_images": len(images), "adjustments_planned": reference_control["planned_total"], "adjustments_executed": reference_control["executed_total"], "adjustments_skipped_known": reference_control["skipped_known_total"], "photo_adjustments_total": reference_control["executed_total"], "other_listings_compared": len(cross_control["other_listing_dirs"]), "rerun_tested": rerun_tested}, "reference_photo_checks": reference_control, "catalog_pair_checks": cross_control, "metadata_checks": exif}
-    status_summary = _store_results(report, output_root, output_dir)
+    report = {"listing_code": listing_code, "listing_dir": str(listing_dir), "preset": preset, "sensitivity": sensitivity, "local_paths": describe_local_paths(annonces_root, local_output_root), "sensitivity_note": "wide sert a explorer les limites et peut creer plus de cas inter-annonces a revoir." if sensitivity == "wide" else "standard correspond au comportement prudent par defaut.", "output_dir": str(output_dir), "reports": {"json": str(output_dir / "photo_quality_control_report.json"), "markdown": str(output_dir / "photo_quality_control_report.md")}, "summary": {"original_images": len(images), "adjustments_planned": reference_control["planned_total"], "adjustments_executed": reference_control["executed_total"], "adjustments_skipped_known": reference_control["skipped_known_total"], "photo_adjustments_total": reference_control["executed_total"], "other_listings_compared": len(cross_control["other_listing_dirs"]), "rerun_tested": rerun_tested}, "reference_photo_checks": reference_control, "catalog_pair_checks": cross_control, "metadata_checks": exif}
+    status_summary = _store_results(report, local_output_root, output_dir)
     report["quality_catalog"] = status_summary
     report["photo_review_catalog"] = status_summary
     _write_json(output_dir / "photo_quality_control_report.json", report)
@@ -432,8 +436,8 @@ def run_listing_photo_quality_control(listing_code: str, annonces_root: str | Pa
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Controle qualite des photos catalogue.")
     parser.add_argument("--listing", required=True, help="Code annonce, par exemple bijoux/O18.")
-    parser.add_argument("--annonces-root", default="annonces")
-    parser.add_argument("--output-root", default="local/debug_catalog_photo_control")
+    parser.add_argument("--annonces-root", default=str(default_annonces_root()), help="Racine externe des annonces catalogue.")
+    parser.add_argument("--output-root", default=str(default_output_root()), help="Dossier local du repo pour rapports, catalogues JSON et bundles debug.")
     parser.add_argument("--preset", choices=("light", "default", "extended", "thorough", "decision_margin_search", "boundary_search"), default="default")
     parser.add_argument("--sensitivity", choices=("standard", "wide"), default="standard")
     parser.add_argument("--policy", choices=("default", "standard", "wide"), default=None, help="Alias lisible pour la sensibilite: default/standard => standard, wide => wide.")

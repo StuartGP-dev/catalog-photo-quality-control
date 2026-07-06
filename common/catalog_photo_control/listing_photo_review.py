@@ -11,6 +11,7 @@ from typing import Any
 
 from .photo_comparison_rules import compare_photo_pair
 from .photo_adjustments import generate_quality_photo_adjustments
+from .local_paths import default_annonces_root, default_output_root
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
@@ -32,13 +33,13 @@ def _parent_folder_from_code(code: str) -> str:
     return head[:1].upper()
 
 
-def resolve_listing_dir(listing_code: str, annonces_root: str | Path = "annonces") -> Path:
+def resolve_listing_dir(listing_code: str, annonces_root: str | Path | None = None) -> Path:
     normalized = listing_code.strip().replace("\\", "/").strip("/")
     if "/" not in normalized:
         raise ValueError("Le code annonce doit inclure le mode, par exemple bijoux/O18.")
 
     parts = [part for part in normalized.split("/") if part]
-    root = Path(annonces_root)
+    root = Path(annonces_root) if annonces_root is not None else default_annonces_root()
 
     direct = root.joinpath(*parts)
     if direct.is_dir():
@@ -141,8 +142,8 @@ def _markdown_report(report: dict[str, Any]) -> str:
 
 def audit_listing_images(
     listing_code: str,
-    annonces_root: str | Path = "annonces",
-    output_root: str | Path = "local/debug_catalog_photo_control",
+    annonces_root: str | Path | None = None,
+    output_root: str | Path | None = None,
     preset: str = "default",
     sensitivity: str = "standard",
     keep_photo_adjustments: bool = True,
@@ -153,7 +154,8 @@ def audit_listing_images(
         raise FileNotFoundError(f"Aucune image trouvee dans le dossier annonce: {listing_dir}")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = Path(output_root) / _safe_listing_code(listing_code) / timestamp
+    local_output_root = Path(output_root) if output_root is not None else default_output_root()
+    output_dir = local_output_root / _safe_listing_code(listing_code) / timestamp
     photo_adjustments_dir = output_dir / "photo_adjustments"
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -202,8 +204,8 @@ def audit_listing_images(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Audit local de controle qualite des images.")
     parser.add_argument("--listing", required=True, help="Code annonce, par exemple bijoux/O18.")
-    parser.add_argument("--annonces-root", default="annonces")
-    parser.add_argument("--output-root", default="local/debug_catalog_photo_control")
+    parser.add_argument("--annonces-root", default=str(default_annonces_root()), help="Racine externe des annonces catalogue.")
+    parser.add_argument("--output-root", default=str(default_output_root()), help="Dossier local du repo pour rapports, catalogues JSON et bundles debug.")
     parser.add_argument("--preset", choices=("light", "default", "extended"), default="default")
     parser.add_argument("--sensitivity", choices=("standard", "wide"), default="standard")
     parser.add_argument(

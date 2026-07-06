@@ -14,6 +14,7 @@ from typing import Any
 from .listing_photo_review import _safe_listing_code, find_listing_images, resolve_listing_dir
 from .photo_adjustments import generate_catalog_photo_adjustment
 from .photo_comparison_rules import compare_photo_pair
+from .local_paths import default_annonces_root, default_output_root, describe_local_paths
 
 DECISION_MARGIN_PRESET = "decision_margin_search"
 DECISION_MARGIN_DB_VERSION = 1
@@ -830,8 +831,8 @@ def markdown_decision_margin_report(report: dict[str, Any]) -> str:
 
 def run_decision_margin_search(
     listing_code: str,
-    annonces_root: str | Path = "annonces",
-    output_root: str | Path = "local/debug_catalog_photo_control",
+    annonces_root: str | Path | None = None,
+    output_root: str | Path | None = None,
     sensitivity: str = "standard",
     seed: int = 12345,
     max_combinations: int = 24,
@@ -845,12 +846,13 @@ def run_decision_margin_search(
 
     run_at = datetime.now().isoformat(timespec="seconds")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = Path(output_root) / _safe_listing_code(listing_code) / f"{timestamp}_decision_margin"
+    local_output_root = Path(output_root) if output_root is not None else default_output_root()
+    output_dir = local_output_root / _safe_listing_code(listing_code) / f"{timestamp}_decision_margin"
     images_output_dir = output_dir / "decision_margin_images"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     families = _decision_margin_families()
-    candidates = _review_margin_candidates(output_root, listing_code, max_candidates)
+    candidates = _review_margin_candidates(local_output_root, listing_code, max_candidates)
     source_images = _candidate_source_images(images, candidates, max(1, max_candidates))
     config = {
         "families": families,
@@ -898,6 +900,7 @@ def run_decision_margin_search(
         "seed": seed,
         "run_at": run_at,
         "config_hash": cfg_hash,
+        "local_paths": describe_local_paths(annonces_root, local_output_root),
         "output_dir": str(output_dir),
         "reports": {
             "json": str(output_dir / "decision_margin_report.json"),
@@ -921,7 +924,7 @@ def run_decision_margin_search(
         },
     }
 
-    catalog = _store_decision_margin_results(report, output_root, output_dir)
+    catalog = _store_decision_margin_results(report, local_output_root, output_dir)
     report["decision_margin_catalog"] = catalog
     report["debug_zip"] = str(output_dir / "decision_margin_quality_bundle.zip")
     _write_json(output_dir / "decision_margin_catalog_summary.json", catalog)
