@@ -95,3 +95,27 @@ python -m common.catalog_photo_control.benchmarks --listing bijoux/O18 --preset 
 ```
 
 Sans `--output-root`, la DB locale, les rapports et les ZIP debug restent automatiquement dans le dossier `local/debug_catalog_photo_control` de ce repo.
+
+
+## Commande exemple - variantes de rendu client
+
+```powershell
+python -m common.catalog_photo_control.client_render_sampler --listing bijoux/O18 --profile client_wide --samples 40 --seed 12345
+```
+
+Ce mode genere plusieurs recettes de retouche naturelles pour une revue client: luminosite, contraste, saturation, nettete, chaleur, rotation legere, recadrage leger, flou leger et qualite JPEG.
+
+Sorties generees dans `local/debug_catalog_photo_control`:
+
+- images finales par recette dans `rendered/`
+- rapport JSON
+- rapport CSV
+- rapport HTML
+- planche avant/apres
+- base SQLite locale `_client_render_sampler` pour ne pas rejouer exactement les memes recettes deja generees pour la meme annonce et le meme profil
+
+Profils disponibles:
+
+- `natural`: retouches legeres et prudentes
+- `client_wide`: plages un peu plus larges tout en gardant un rendu naturel
+
