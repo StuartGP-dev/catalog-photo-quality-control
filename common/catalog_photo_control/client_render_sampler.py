@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
 from .listing_photo_review import _safe_listing_code, find_listing_images, resolve_listing_dir
 from .local_paths import default_annonces_root, default_output_root, describe_local_paths
-from .strategy import SearchStrategy
+from .strategy import available_strategies, create_strategy, parse_options
 
 DB_VERSION = 1
 PIPELINE_VERSION = 2
@@ -210,7 +210,7 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 def _html(report: dict[str, Any], rows: list[dict[str, Any]]) -> str:
     lines = ["<!doctype html><html lang='fr'><head><meta charset='utf-8'><title>Render sampler</title><style>body{font-family:Arial;margin:24px}img{max-width:100%;border:1px solid #ddd}table{border-collapse:collapse;width:100%;font-size:13px}td,th{border:1px solid #ddd;padding:6px}th{background:#f5f5f5}code{background:#f7f7f7;padding:2px 4px}</style></head><body>"]
     lines.append(f"<h1>Variantes de rendu client - {html.escape(report['listing_code'])}</h1>")
-    lines.append(f"<p>Profil: <code>{html.escape(report['profile'])}</code> | Recettes executees: {report['summary']['recipes_executed']} | Images sources: {report['summary']['source_images']}</p>")
+    lines.append(f"<p>Profil: <code>{html.escape(report['profile'])}</code> | Strategie: <code>{html.escape(report['search_strategy'])}</code> | Recettes executees: {report['summary']['recipes_executed']} | Images sources: {report['summary']['source_images']}</p>")
     lines.append(f"<p>Duree: {report['summary']['duration_seconds']:.1f}s | Lignes incluses dans ce rapport: {report['summary']['report_rows_included']} / {report['summary']['outputs_total']}</p>")
     lines.append(f"<p><img src='{html.escape(Path(report['reports']['contact_sheet']).name)}' alt='Planche avant apres'></p>")
     lines.append("<table><thead><tr><th>Recette</th><th>Image</th><th>Delta lum.</th><th>Delta cont.</th><th>Delta sat.</th><th>Delta details</th><th>Parametres</th></tr></thead><tbody>")
@@ -233,6 +233,8 @@ def run_client_render_sampler(
     duration_minutes: float | None = None,
     report_row_limit: int = 1000,
     progress_every: int = 25,
+    search_strategy: str = "triangular",
+    strategy_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if profile not in PROFILES:
         raise ValueError(f"Profil inconnu: {profile}")
@@ -247,7 +249,8 @@ def run_client_render_sampler(
     db_file = _db_path(local_output_root, listing_code)
     conn = _connect_db(db_file)
     known = _known_recipes(conn, listing_code, profile)
-    strategy = SearchStrategy(PROFILES[profile], seed=seed)
+    strategy_options = dict(strategy_options or {})
+    strategy = create_strategy(search_strategy, PROFILES[profile], seed=seed, **strategy_options)
     effective_seed = strategy.seed
     started_monotonic = time.monotonic()
     deadline = started_monotonic + duration_minutes * 60.0 if duration_minutes and duration_minutes > 0 else None
@@ -317,6 +320,8 @@ def run_client_render_sampler(
         "listing_code": listing_code,
         "listing_dir": str(listing_dir),
         "profile": profile,
+        "search_strategy": search_strategy,
+        "strategy_options": strategy_options,
         "seed": effective_seed,
         "output_dir": str(output_dir),
         "database": str(db_file),
@@ -358,11 +363,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--duration-minutes", type=float, default=None, help="Fait tourner le sampler pendant une duree cible, par exemple 120 pour deux heures.")
     parser.add_argument("--report-row-limit", type=int, default=1000, help="Nombre maximum de lignes conservees dans les rapports JSON/CSV/HTML. La DB garde tout.")
     parser.add_argument("--progress-every", type=int, default=25, help="Affiche une progression toutes les N recettes. 0 pour desactiver.")
+    parser.add_argument("--search-strategy", choices=available_strategies(), default="triangular", help="Strategie de recherche a utiliser.")
+    parser.add_argument("--strategy-params", default=None, help="Options JSON passees a la strategie, par exemple '{\"levels\": 7}'.")
+    parser.add_argument("--strategy-param", action="append", default=None, help="Option cle=valeur. Peut etre repete.")
     args = parser.parse_args(argv)
     samples = args.samples
     if samples is None:
         samples = DURATION_MODE_SAMPLES if args.duration_minutes and args.duration_minutes > 0 else DEFAULT_BATCH_SAMPLES
     try:
+        strategy_options = parse_options(args.strategy_params, args.strategy_param)
         report = run_client_render_sampler(
             args.listing,
             args.annonces_root,
@@ -375,6 +384,8 @@ def main(argv: list[str] | None = None) -> int:
             args.duration_minutes,
             max(1, args.report_row_limit),
             max(0, args.progress_every),
+            args.search_strategy,
+            strategy_options,
         )
     except Exception as exc:
         print(f"Erreur: {exc}")
@@ -388,6 +399,8 @@ def main(argv: list[str] | None = None) -> int:
     print("")
     print("VARIANTES RENDU CLIENT:")
     print(f"profile: {report['profile']}")
+    print(f"search_strategy: {report['search_strategy']}")
+    print(f"strategy_options: {report['strategy_options']}")
     print(f"seed: {report['seed']}")
     print(f"recettes executees: {report['summary']['recipes_executed']}")
     print(f"recettes deja connues ignorees: {report['summary']['recipes_skipped_known']}")

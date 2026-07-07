@@ -141,3 +141,32 @@ Notes:
 - common.catalog_photo_control.client_render_sampler: orchestration, rendu, rapports, DB locale.
 - common.catalog_photo_control.strategy: strategie generique de tirage du prochain jeu de valeurs. Ce fichier ne contient pas de logique metier.
 
+
+## Architecture strategie plugin
+
+Le choix du prochain jeu de valeurs est gere par un package interchangeable:
+
+- common.catalog_photo_control.strategy.triangular: comportement par defaut, centrÃ© sur la valeur de reference.
+- common.catalog_photo_control.strategy.uniform: tirage uniforme dans les bornes.
+- common.catalog_photo_control.strategy.grid: parcours par niveaux discrets.
+
+Commande par defaut:
+
+`powershell
+python -m common.catalog_photo_control.client_render_sampler --listing bijoux/O18 --profile client_wide --samples 40
+`
+
+Choisir une strategie:
+
+`powershell
+python -m common.catalog_photo_control.client_render_sampler --listing bijoux/O18 --profile client_wide --samples 40 --search-strategy uniform
+`
+
+Passer des options a la strategie:
+
+`powershell
+python -m common.catalog_photo_control.client_render_sampler --listing bijoux/O18 --profile client_wide --samples 40 --search-strategy grid --strategy-param levels=7
+`
+
+Les options peuvent aussi etre passees en JSON avec --strategy-params.
+
