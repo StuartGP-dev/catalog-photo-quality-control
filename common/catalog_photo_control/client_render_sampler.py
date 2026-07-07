@@ -5,12 +5,10 @@ import csv
 import hashlib
 import html
 import json
-import os
 import sqlite3
 import time
 from datetime import datetime
 from pathlib import Path
-from random import Random
 from typing import Any
 
 import numpy as np
@@ -18,6 +16,7 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
 from .listing_photo_review import _safe_listing_code, find_listing_images, resolve_listing_dir
 from .local_paths import default_annonces_root, default_output_root, describe_local_paths
+from .strategy import SearchStrategy
 
 DB_VERSION = 1
 PIPELINE_VERSION = 2
@@ -71,10 +70,6 @@ def _stable_id(data: dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _auto_seed() -> int:
-    return int(time.time_ns() % 2_147_483_647) ^ os.getpid()
-
-
 def _db_path(output_root: Path, listing_code: str) -> Path:
     return output_root / "_client_render_sampler" / f"{_safe_listing_code(listing_code)}.sqlite3"
 
@@ -103,26 +98,6 @@ def _connect_db(path: Path) -> sqlite3.Connection:
 def _known_recipes(conn: sqlite3.Connection, listing_code: str, profile: str) -> set[str]:
     rows = conn.execute("SELECT recipe_id FROM recipes WHERE listing_code=? AND profile=?", (listing_code, profile)).fetchall()
     return {str(row[0]) for row in rows}
-
-
-def _sample_float(rng: Random, bounds: tuple[float, float, float], digits: int = 4) -> float:
-    return round(rng.triangular(bounds[0], bounds[1], bounds[2]), digits)
-
-
-def _sample_params(rng: Random, profile: str) -> dict[str, Any]:
-    p = PROFILES[profile]
-    q = p["quality"]  # type: ignore[assignment]
-    return {
-        "brightness": _sample_float(rng, p["brightness"]),  # type: ignore[arg-type]
-        "contrast": _sample_float(rng, p["contrast"]),  # type: ignore[arg-type]
-        "saturation": _sample_float(rng, p["saturation"]),  # type: ignore[arg-type]
-        "sharpness": _sample_float(rng, p["sharpness"]),  # type: ignore[arg-type]
-        "warmth": _sample_float(rng, p["warmth"]),  # type: ignore[arg-type]
-        "angle": _sample_float(rng, p["angle"]),  # type: ignore[arg-type]
-        "crop": _sample_float(rng, p["crop"]),  # type: ignore[arg-type]
-        "blur": _sample_float(rng, p["blur"]),  # type: ignore[arg-type]
-        "quality": int(round(rng.triangular(int(q[0]), int(q[1]), int(q[2])))),
-    }
 
 
 def _recipe_id(listing_code: str, profile: str, params: dict[str, Any]) -> str:
@@ -272,8 +247,8 @@ def run_client_render_sampler(
     db_file = _db_path(local_output_root, listing_code)
     conn = _connect_db(db_file)
     known = _known_recipes(conn, listing_code, profile)
-    effective_seed = _auto_seed() if seed is None else int(seed)
-    rng = Random(effective_seed)
+    strategy = SearchStrategy(PROFILES[profile], seed=seed)
+    effective_seed = strategy.seed
     started_monotonic = time.monotonic()
     deadline = started_monotonic + duration_minutes * 60.0 if duration_minutes and duration_minutes > 0 else None
     now = datetime.now().isoformat(timespec="seconds")
@@ -289,8 +264,9 @@ def run_client_render_sampler(
             if deadline is not None and time.monotonic() >= deadline:
                 stop_reason = "duration_reached"
                 break
-            attempts += 1
-            params = _sample_params(rng, profile)
+            result = strategy.next_values()
+            attempts += result.attempts
+            params = result.values
             rid = _recipe_id(listing_code, profile, params)
             if rid in known:
                 skipped += 1

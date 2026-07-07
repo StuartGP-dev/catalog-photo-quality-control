@@ -135,3 +135,9 @@ Notes:
 - La base SQLite conserve toutes les recettes et sorties.
 - --report-row-limit limite seulement les rapports JSON/CSV/HTML pour eviter des fichiers trop lourds.
 - Profil supplementaire: studio_wide, plus varie que client_wide tout en gardant un rendu catalogue naturel.
+
+## Architecture interne - sampler
+
+- common.catalog_photo_control.client_render_sampler: orchestration, rendu, rapports, DB locale.
+- common.catalog_photo_control.strategy: strategie generique de tirage du prochain jeu de valeurs. Ce fichier ne contient pas de logique metier.
+
