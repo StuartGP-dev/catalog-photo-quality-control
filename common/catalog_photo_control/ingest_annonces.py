@@ -105,12 +105,18 @@ def find_annonce_dirs(root: Path) -> Iterable[Path]:
     if not root.exists():
         raise FileNotFoundError(f"Annonces root does not exist: {root}")
 
-    if list_image_files(root):
-        yield root
+    try:
+        if list_image_files(root):
+            yield root
+    except ValueError as exc:
+        print(f"WARNING invalid annonce skipped: {exc}", file=sys.stderr)
 
     for child in sorted((p for p in root.rglob("*") if p.is_dir()), key=lambda p: str(p).lower()):
-        if list_image_files(child):
-            yield child
+        try:
+            if list_image_files(child):
+                yield child
+        except ValueError as exc:
+            print(f"WARNING invalid annonce skipped: {exc}", file=sys.stderr)
 
 
 def annonce_key_for_dir(root: Path, directory: Path) -> str:
@@ -121,6 +127,34 @@ def annonce_key_for_dir(root: Path, directory: Path) -> str:
     if annonce_key in {"", "."}:
         annonce_key = directory.name or "root"
     return annonce_key
+
+
+def resolve_annonce_dir(root: Path, annonce_key: str) -> Path:
+    wanted = annonce_key.replace("\\", "/").strip("/")
+    parts = [part for part in wanted.split("/") if part]
+    if not parts:
+        raise ValueError("annonce_key vide")
+
+    direct = root.joinpath(*parts)
+    if direct.is_dir():
+        return direct
+
+    # Compatibility fallback: bijoux/O18 -> bijoux/O/O18.
+    if len(parts) >= 2:
+        mode = parts[0]
+        code = parts[-1]
+        parent = ""
+        for char in code:
+            if char.isalpha():
+                parent += char
+            else:
+                break
+        if parent:
+            dynamic = root / mode / parent.upper() / code
+            if dynamic.is_dir():
+                return dynamic
+
+    raise FileNotFoundError(f"Annonce introuvable sous {root}: {annonce_key}")
 
 
 def build_annonce_info(root: Path, directory: Path) -> AnnonceInfo:
@@ -219,15 +253,11 @@ def ingest(
     db_dsn: str | None = None,
 ) -> int:
     settings = load_settings(annonces_root=root, db_dsn=db_dsn)
-    annonce_dirs = list(find_annonce_dirs(settings.annonces_root))
 
     if annonce_key:
-        wanted = annonce_key.replace("\\", "/").strip("/")
-        annonce_dirs = [
-            directory
-            for directory in annonce_dirs
-            if annonce_key_for_dir(settings.annonces_root, directory) == wanted
-        ]
+        annonce_dirs = [resolve_annonce_dir(settings.annonces_root, annonce_key)]
+    else:
+        annonce_dirs = list(find_annonce_dirs(settings.annonces_root))
 
     if limit is not None:
         annonce_dirs = annonce_dirs[:limit]
