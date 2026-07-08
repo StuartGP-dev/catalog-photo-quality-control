@@ -104,7 +104,7 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         UNIQUE(candidate_id, image_id)
     )
     """,
-    """,
+    """
     CREATE TABLE IF NOT EXISTS annonce_filter_clusters (
         cluster_id TEXT PRIMARY KEY,
         annonce_id TEXT NOT NULL,
