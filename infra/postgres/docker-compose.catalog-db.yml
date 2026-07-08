@@ -1,0 +1,21 @@
+services:
+  catalog-postgres:
+    image: postgres:16-alpine
+    container_name: catalog-photo-control-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${CATALOG_POSTGRES_DB:-catalog_filter_engine}
+      POSTGRES_USER: ${CATALOG_POSTGRES_USER:-catalog_user}
+      POSTGRES_PASSWORD: ${CATALOG_POSTGRES_PASSWORD:-catalog_password_change_me}
+    ports:
+      - "${CATALOG_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - catalog_photo_control_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${CATALOG_POSTGRES_USER:-catalog_user} -d ${CATALOG_POSTGRES_DB:-catalog_filter_engine}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  catalog_photo_control_pgdata:
