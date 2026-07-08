@@ -74,14 +74,18 @@ def find_annonce_dirs(root: Path) -> Iterable[Path]:
             yield child
 
 
-def build_annonce_info(root: Path, directory: Path) -> AnnonceInfo:
+def annonce_key_for_dir(root: Path, directory: Path) -> str:
     try:
         annonce_key = directory.relative_to(root).as_posix()
     except ValueError:
         annonce_key = directory.name
     if annonce_key in {"", "."}:
         annonce_key = directory.name or "root"
+    return annonce_key
 
+
+def build_annonce_info(root: Path, directory: Path) -> AnnonceInfo:
+    annonce_key = annonce_key_for_dir(root, directory)
     images: list[ImageInfo] = []
     for index, image_path in enumerate(list_image_files(directory)):
         width, height = image_dimensions(image_path)
@@ -166,13 +170,33 @@ def upsert_annonce(db: CatalogDb, annonce: AnnonceInfo) -> None:
         )
 
 
-def ingest(root: Path, *, limit: int | None = None, dry_run: bool = False, init_db: bool = True, db_dsn: str | None = None) -> int:
+def ingest(
+    root: Path,
+    *,
+    limit: int | None = None,
+    annonce_key: str | None = None,
+    dry_run: bool = False,
+    init_db: bool = True,
+    db_dsn: str | None = None,
+) -> int:
     settings = load_settings(annonces_root=root, db_dsn=db_dsn)
     annonce_dirs = list(find_annonce_dirs(settings.annonces_root))
+
+    if annonce_key:
+        wanted = annonce_key.replace("\\", "/").strip("/")
+        annonce_dirs = [
+            directory
+            for directory in annonce_dirs
+            if annonce_key_for_dir(settings.annonces_root, directory) == wanted
+        ]
+
     if limit is not None:
         annonce_dirs = annonce_dirs[:limit]
 
     annonces = [build_annonce_info(settings.annonces_root, directory) for directory in annonce_dirs]
+
+    if annonce_key and not annonces:
+        raise FileNotFoundError(f"Annonce introuvable sous {settings.annonces_root}: {annonce_key}")
 
     if dry_run:
         for annonce in annonces:
@@ -193,6 +217,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--annonces-root", default=None, help="Root folder containing annonce subfolders.")
     parser.add_argument("--db-dsn", default=None, help="Override CATALOG_DB_DSN for this run.")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of annonce folders for smoke tests.")
+    parser.add_argument("--annonce-key", default=None, help="Only ingest one annonce key, e.g. bijoux/O18.")
     parser.add_argument("--dry-run", action="store_true", help="Scan and print only, do not write DB.")
     parser.add_argument("--no-init-db", action="store_true", help="Do not create schema before ingesting.")
     return parser
@@ -205,6 +230,7 @@ def main(argv: list[str] | None = None) -> int:
     count = ingest(
         settings.annonces_root,
         limit=args.limit,
+        annonce_key=args.annonce_key,
         dry_run=args.dry_run,
         init_db=not args.no_init_db,
         db_dsn=args.db_dsn,
