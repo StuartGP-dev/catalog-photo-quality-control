@@ -2,171 +2,106 @@
 
 Ce paquet utilise un nommage neutre et oriente controle qualite des photos catalogue.
 
+## Objectif actuel
+
+Construire une pipeline de filtres par annonce :
+
+1. scanner les annonces locales ;
+2. tester beaucoup de recettes de rendu ;
+3. stocker les resultats dans une DB partagee ;
+4. clusteriser les filtres par annonce ;
+5. selectionner progressivement des filtres differents entre eux ;
+6. exporter une annonce complete avec le meme filtre applique a toutes ses images.
+
+Une annonce contient plusieurs images. Une recette de filtre doit donc etre evaluee sur toute l'annonce, avec des stats par image puis une agregation annonce : moyenne, minimum, maximum et stabilite.
+
 ## Modules principaux
 
-- `common.catalog_photo_control.photo_quality_control`
-- `common.catalog_photo_control.benchmarks`
-- `common.catalog_photo_control.decision_margin_search`
-- `common.catalog_photo_control.photo_comparison_rules`
-- `common.catalog_photo_control.photo_adjustments`
-- `common.catalog_photo_control.photo_metadata`
-- `common.catalog_photo_control.listing_photo_review`
-
+- `common.catalog_photo_control.client_render_sampler`
+- `common.catalog_photo_control.filter_cluster_builder`
+- `common.catalog_photo_control.diverse_target_selector`
+- `common.catalog_photo_control.catalog_config`
+- `common.catalog_photo_control.catalog_db`
+- `common.catalog_photo_control.ingest_annonces`
 
 ## Chemins locaux par defaut
 
-Par defaut, le code lit les annonces depuis le projet Bot-Vinted existant :
+Par defaut, le code lit les annonces depuis :
 
 ```text
-C:\Users\yanis\Documents\Code\Bot-Vinted\annonces
+C:\Users\yanis\Documents\Code\Bot\annonces
 ```
 
-Tous les fichiers generes par ce repo restent dans le repo `catalog-photo-quality-control`, sous :
+Les sorties generees restent dans :
 
 ```text
 <repo>\local\debug_catalog_photo_control
+<repo>\local\catalog_filter_engine
 ```
 
-Cela inclut les catalogues JSON locaux, les rapports Markdown/JSON, les images de controle generees et les ZIP debug. Le dossier `local/` est ignore par Git pour eviter de publier les sorties de benchmark.
+Le dossier `local/` est ignore par Git pour eviter de publier les sorties de benchmark, les DB SQLite locales et les images generees.
 
-Tu peux surcharger les chemins sans modifier le code avec :
+## Environnement Python
+
+Creation du venv Windows :
 
 ```powershell
-$env:CATALOG_PHOTO_ANNONCES_ROOT = "C:\Users\yanis\Documents\Code\Bot-Vinted\annonces"
-$env:CATALOG_PHOTO_OUTPUT_ROOT = "C:\Users\yanis\Documents\Code\catalog-photo-quality-control\local\debug_catalog_photo_control"
+cd C:\Users\yanis\Documents\Code\Catalog-Photo-Control
+powershell -ExecutionPolicy Bypass -File .\scripts\setup_venv.ps1
+.\.venv\Scripts\Activate.ps1
 ```
 
+## Configuration DB
 
-## Resolution des dossiers annonce
-
-La valeur passee a `--listing` reste courte et lisible. Par exemple :
-
-```text
-bijoux/O18
-```
-
-Le code teste d'abord le chemin direct :
-
-```text
-C:\Users\yanis\Documents\Code\Bot-Vinted\annonces\bijoux\O18
-```
-
-Puis il teste automatiquement le rangement par famille de reference :
-
-```text
-C:\Users\yanis\Documents\Code\Bot-Vinted\annonces\bijoux\O\O18
-```
-
-Donc meme si le premier `Test-Path` retourne `False`, la commande `--listing bijoux/O18` fonctionne tant que le dossier range dans `bijoux\O\O18` existe.
-
-Verification rapide :
+Pour un usage multi-PC, utiliser PostgreSQL via `CATALOG_DB_DSN` :
 
 ```powershell
-Test-Path "C:\Users\yanis\Documents\Code\Bot-Vinted\annonces\bijoux\O\O18"
+$env:CATALOG_DB_DSN = "postgresql://catalog_user:catalog_password@100.x.x.x:5432/catalog_filter_engine"
 ```
 
-## Commande exemple - controle standard
+Fallback local SQLite pour smoke tests :
 
 ```powershell
-python -m common.catalog_photo_control.photo_quality_control --listing bijoux/O18 --preset default --sensitivity standard --max-other-listings 20
+$env:CATALOG_DB_DSN = "sqlite:///local/catalog_filter_engine/catalog_filters.sqlite3"
 ```
 
-Les rapports utilisent les statuts `match/review/clear` pour garder une lecture orientee controle qualite.
-
-## Commande exemple - analyse des marges de decision photo
+Les autres variables utiles :
 
 ```powershell
-python -m common.catalog_photo_control.benchmarks --listing bijoux/O18 --preset decision_margin_search --policy default --decision-margin-seed 12345 --decision-margin-max-combinations 24
+$env:CATALOG_PHOTO_ANNONCES_ROOT = "C:\Users\yanis\Documents\Code\Bot\annonces"
+$env:CATALOG_PHOTO_OUTPUT_ROOT = "local\catalog_filter_engine"
 ```
 
-Ce mode ajoute une section `Analyse des marges de decision photo` dans les rapports JSON et Markdown. Il teste progressivement plusieurs familles d'ajustements photo plausibles, encadre les zones de transition par dichotomie, puis enregistre les points de transition dans un catalogue separe sous `local/debug_catalog_photo_control/_decision_margin_catalog/`.
+## Ingestion annonces
 
-Options utiles :
-
-- `--decision-margin-seed` : rend les combinaisons legeres reproductibles.
-- `--decision-margin-max-combinations` : limite le nombre de variations photo realistes combinees.
-- `--decision-margin-candidates` : limite le nombre d'images sources priorisees depuis les resultats deja produits.
-- `--decision-margin-iterations` : controle le nombre d'iterations de dichotomie autour d'une zone de transition.
-
-## Commande avec chemins explicites
+Dry-run :
 
 ```powershell
-python -m common.catalog_photo_control.benchmarks --listing bijoux/O18 --preset decision_margin_search --policy default --annonces-root "C:\Users\yanis\Documents\Code\Bot-Vinted\annonces"
+python -m common.catalog_photo_control.ingest_annonces --dry-run --limit 5
 ```
 
-Sans `--output-root`, la DB locale, les rapports et les ZIP debug restent automatiquement dans le dossier `local/debug_catalog_photo_control` de ce repo.
-
-
-## Commande exemple - variantes de rendu client
+Ecriture DB :
 
 ```powershell
-python -m common.catalog_photo_control.client_render_sampler --listing bijoux/O18 --profile client_wide --samples 40 --seed 12345
+python -m common.catalog_photo_control.ingest_annonces --limit 5
 ```
 
-Ce mode genere plusieurs recettes de retouche naturelles pour une revue client: luminosite, contraste, saturation, nettete, chaleur, rotation legere, recadrage leger, flou leger et qualite JPEG.
+Run complet :
 
-Sorties generees dans `local/debug_catalog_photo_control`:
+```powershell
+python -m common.catalog_photo_control.ingest_annonces
+```
 
-- images finales par recette dans `rendered/`
-- rapport JSON
-- rapport CSV
-- rapport HTML
-- planche avant/apres
-- base SQLite locale `_client_render_sampler` pour ne pas rejouer exactement les memes recettes deja generees pour la meme annonce et le meme profil
+## Nettoyage local
 
-Profils disponibles:
+Voir ce qui serait supprime :
 
-- `natural`: retouches legeres et prudentes
-- `client_wide`: plages un peu plus larges tout en gardant un rendu naturel
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\clean_generated_artifacts.ps1 -WhatIfOnly
+```
 
+Supprimer les artifacts locaux ignores par Git :
 
-### Mode longue duree - variantes de rendu client
-
-Pour faire tourner le sampler pendant une duree cible:
-
-`powershell
-python -m common.catalog_photo_control.client_render_sampler --listing bijoux/O18 --profile client_wide --duration-minutes 120 --progress-every 50 --report-row-limit 1000 --contact-sheet-rows 120
-`
-
-Notes:
-- --duration-minutes 120 lance un run d'environ deux heures.
-- --samples peut rester omis en mode duree.
-- --seed peut rester omis: une seed automatique est utilisee.
-- La base SQLite conserve toutes les recettes et sorties.
-- --report-row-limit limite seulement les rapports JSON/CSV/HTML pour eviter des fichiers trop lourds.
-- Profil supplementaire: studio_wide, plus varie que client_wide tout en gardant un rendu catalogue naturel.
-
-## Architecture interne - sampler
-
-- common.catalog_photo_control.client_render_sampler: orchestration, rendu, rapports, DB locale.
-- common.catalog_photo_control.strategy: strategie generique de tirage du prochain jeu de valeurs. Ce fichier ne contient pas de logique metier.
-
-
-## Architecture strategie plugin
-
-Le choix du prochain jeu de valeurs est gere par un package interchangeable:
-
-- common.catalog_photo_control.strategy.triangular: comportement par defaut, centrÃ© sur la valeur de reference.
-- common.catalog_photo_control.strategy.uniform: tirage uniforme dans les bornes.
-- common.catalog_photo_control.strategy.grid: parcours par niveaux discrets.
-
-Commande par defaut:
-
-`powershell
-python -m common.catalog_photo_control.client_render_sampler --listing bijoux/O18 --profile client_wide --samples 40
-`
-
-Choisir une strategie:
-
-`powershell
-python -m common.catalog_photo_control.client_render_sampler --listing bijoux/O18 --profile client_wide --samples 40 --search-strategy uniform
-`
-
-Passer des options a la strategie:
-
-`powershell
-python -m common.catalog_photo_control.client_render_sampler --listing bijoux/O18 --profile client_wide --samples 40 --search-strategy grid --strategy-param levels=7
-`
-
-Les options peuvent aussi etre passees en JSON avec --strategy-params.
-
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\clean_generated_artifacts.ps1 -IncludeArchives
+```
