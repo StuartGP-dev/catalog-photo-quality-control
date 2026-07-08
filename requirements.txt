@@ -1,0 +1,4 @@
+numpy>=1.26
+Pillow>=10.0
+psycopg[binary]>=3.2
+python-dotenv>=1.0
