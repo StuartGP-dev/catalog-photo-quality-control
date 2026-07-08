@@ -22,6 +22,7 @@ Une annonce contient plusieurs images. Une recette de filtre doit donc etre eval
 - `common.catalog_photo_control.diverse_target_selector`
 - `common.catalog_photo_control.catalog_config`
 - `common.catalog_photo_control.catalog_db`
+- `common.catalog_photo_control.init_catalog_db`
 - `common.catalog_photo_control.ingest_annonces`
 
 ## Chemins locaux par defaut
@@ -51,15 +52,26 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup_venv.ps1
 .\.venv\Scripts\Activate.ps1
 ```
 
-## Configuration DB
+## DB partagee multi-PC
 
-Pour un usage multi-PC, utiliser PostgreSQL via `CATALOG_DB_DSN` :
+La DB principale doit etre PostgreSQL, pas SQLite.
+
+Demarrage local via Docker sur le PC qui heberge la DB :
 
 ```powershell
-$env:CATALOG_DB_DSN = "postgresql://catalog_user:catalog_password@100.x.x.x:5432/catalog_filter_engine"
+powershell -ExecutionPolicy Bypass -File .\scripts\start_shared_db.ps1 -Password "CHANGE_ME_STRONG"
+$env:CATALOG_DB_DSN = "postgresql://catalog_user:CHANGE_ME_STRONG@localhost:5432/catalog_filter_engine"
+python -m common.catalog_photo_control.init_catalog_db --require-postgres
 ```
 
-Fallback local SQLite pour smoke tests :
+Depuis un autre PC via Tailscale, remplacer `localhost` par l'IP Tailscale du PC qui heberge Postgres :
+
+```powershell
+$env:CATALOG_DB_DSN = "postgresql://catalog_user:CHANGE_ME_STRONG@100.x.x.x:5432/catalog_filter_engine"
+python -m common.catalog_photo_control.init_catalog_db --require-postgres
+```
+
+Fallback local SQLite seulement pour smoke tests isoles :
 
 ```powershell
 $env:CATALOG_DB_DSN = "sqlite:///local/catalog_filter_engine/catalog_filters.sqlite3"
@@ -74,15 +86,16 @@ $env:CATALOG_PHOTO_OUTPUT_ROOT = "local\catalog_filter_engine"
 
 ## Ingestion annonces
 
-Dry-run :
+Dry-run sans ecriture DB :
 
 ```powershell
 python -m common.catalog_photo_control.ingest_annonces --dry-run --limit 5
 ```
 
-Ecriture DB :
+Ecriture DB partagee :
 
 ```powershell
+$env:CATALOG_DB_DSN = "postgresql://catalog_user:CHANGE_ME_STRONG@localhost:5432/catalog_filter_engine"
 python -m common.catalog_photo_control.ingest_annonces --limit 5
 ```
 
