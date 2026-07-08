@@ -57,20 +57,48 @@ def resolve_listing_dir(listing_code: str, annonces_root: str | Path | None = No
     )
 
 
+def _numbered_primary_image_files(listing_dir: Path) -> list[Path]:
+    """Return only direct listing images named 0..N, ignoring helper files/folders.
+
+    The production annonce images are expected to be direct files named like
+    0.jpg, 1.jpg, 2.png...  Subfolders such as "autre" / "autres" are not
+    traversed by this function, and non-numbered files in the listing folder are
+    ignored.
+    """
+    numbered: list[tuple[int, Path]] = []
+    seen_numbers: dict[int, Path] = {}
+
+    for path in listing_dir.iterdir():
+        if not path.is_file() or path.suffix.lower() not in IMAGE_EXTENSIONS:
+            continue
+        if not path.stem.isdigit():
+            continue
+
+        index = int(path.stem)
+        if index in seen_numbers:
+            other = seen_numbers[index]
+            raise ValueError(
+                f"Images annonce dupliquees pour l'index {index}: {other.name} et {path.name} dans {listing_dir}"
+            )
+        seen_numbers[index] = path
+        numbered.append((index, path))
+
+    numbered.sort(key=lambda item: item[0])
+    indexes = [index for index, _ in numbered]
+    expected = list(range(len(indexes)))
+    if indexes and indexes != expected:
+        missing = sorted(set(range(indexes[-1] + 1)) - set(indexes))
+        raise ValueError(
+            f"Images annonce non contigues dans {listing_dir}. "
+            f"Trouve: {indexes}. Attendu: 0..{len(indexes) - 1}. Manquants: {missing}"
+        )
+
+    return [path for _, path in numbered]
+
+
 def find_listing_images(listing_dir: str | Path) -> list[Path]:
     listing_dir = Path(listing_dir)
-    images = [
-        path
-        for path in listing_dir.iterdir()
-        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
-    ]
-
-    def sort_key(path: Path) -> tuple[int, int | str, str]:
-        if path.stem.isdigit():
-            return (0, int(path.stem), path.name.lower())
-        return (1, path.name.lower(), path.name.lower())
-
-    return sorted(images, key=sort_key)
+    return _numbered_primary_image_files(listing_dir)
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
@@ -151,7 +179,7 @@ def audit_listing_images(
     listing_dir = resolve_listing_dir(listing_code, annonces_root=annonces_root)
     images = find_listing_images(listing_dir)
     if not images:
-        raise FileNotFoundError(f"Aucune image trouvee dans le dossier annonce: {listing_dir}")
+        raise FileNotFoundError(f"Aucune image numerotee 0..N trouvee dans le dossier annonce: {listing_dir}")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     local_output_root = Path(output_root) if output_root is not None else default_output_root()
