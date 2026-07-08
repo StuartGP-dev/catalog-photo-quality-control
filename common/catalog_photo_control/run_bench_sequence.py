@@ -109,8 +109,7 @@ def main(argv: list[str] | None = None) -> int:
         f"suspect_threshold={args.suspect_threshold}",
         "--report-row-limit",
         str(args.report_row_limit),
-        "--bench-summary-limit",
-        "0",
+        "--no-bench-summary",
         "--progress-every",
         str(args.progress_every),
     ]
