@@ -2,7 +2,8 @@ param(
     [string]$DbName = "catalog_filter_engine",
     [string]$User = "catalog_user",
     [string]$Password = "catalog_password_change_me",
-    [int]$Port = 5432
+    [int]$Port = 5432,
+    [switch]$ResetData
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,6 +27,14 @@ $env:CATALOG_POSTGRES_PASSWORD = $Password
 $env:CATALOG_POSTGRES_PORT = "$Port"
 
 $ComposeFile = Join-Path $RepoRoot "infra\postgres\docker-compose.catalog-db.yml"
+
+if ($ResetData) {
+    Write-Host "ResetData enabled: stopping container and removing the catalog PostgreSQL volume."
+    docker compose -f $ComposeFile down -v
+    if ($LASTEXITCODE -ne 0) {
+        throw "docker compose down -v failed with exit code $LASTEXITCODE."
+    }
+}
 
 docker compose -f $ComposeFile up -d
 if ($LASTEXITCODE -ne 0) {
