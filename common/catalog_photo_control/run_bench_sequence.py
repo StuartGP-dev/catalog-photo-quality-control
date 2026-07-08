@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import subprocess
 import sys
@@ -66,6 +65,7 @@ def _extract_cluster_json(report_json: Path) -> Path:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Lance une sequence de benchs avec DB partagee et selection finale diversifiee.")
     parser.add_argument("--listing", required=True)
+    parser.add_argument("--annonce-key", default=None, help="Cle annonce en DB. Par defaut: meme valeur que --listing.")
     parser.add_argument("--profile", default="client_wide")
     parser.add_argument("--minutes-stage1", type=float, default=45.0)
     parser.add_argument("--minutes-stage2", type=float, default=45.0)
@@ -83,9 +83,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stage1-min-fraction", type=float, default=0.62)
     parser.add_argument("--stage2-min-fraction", type=float, default=0.45)
     parser.add_argument("--run-label", default=None)
+    parser.add_argument("--write-catalog-db", action="store_true", help="Importe la selection finale diverse dans la DB partagee.")
     args = parser.parse_args(argv)
 
     run_id = args.run_label or datetime.now().strftime("bench_sequence_%Y%m%d_%H%M%S")
+    annonce_key = args.annonce_key or args.listing
     seq_dir = Path("local") / "debug_catalog_photo_control" / "bench_sequences" / _safe_listing(args.listing) / run_id
     seq_dir.mkdir(parents=True, exist_ok=True)
 
@@ -211,6 +213,8 @@ def main(argv: list[str] | None = None) -> int:
     _run(cluster2_cmd, seq_dir / "stage2_filter_clusters.log")
 
     # Selection finale : maximum de filtres cibles distants, sur stage 1 + stage 2.
+    diverse_dir = seq_dir / "diverse_target_filters"
+    diverse_json = diverse_dir / "diverse_target_filters.json"
     diverse_cmd = [
         sys.executable,
         "-m",
@@ -220,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
         "--source-report",
         str(stage2_report),
         "--output-dir",
-        str(seq_dir / "diverse_target_filters"),
+        str(diverse_dir),
         "--min-score",
         str(args.min_score),
         "--min-distance",
@@ -236,15 +240,31 @@ def main(argv: list[str] | None = None) -> int:
     ]
     _run(diverse_cmd, seq_dir / "diverse_target_selector.log")
 
+    if args.write_catalog_db:
+        import_cmd = [
+            sys.executable,
+            "-m",
+            "common.catalog_photo_control.import_diverse_filters_to_db",
+            "--annonce-key",
+            annonce_key,
+            "--diverse-json",
+            str(diverse_json),
+            "--source-run-label",
+            run_id,
+        ]
+        _run(import_cmd, seq_dir / "import_catalog_db.log")
+
     print("")
     print("BENCH SEQUENCE DONE")
     print(f"sequence_dir: {seq_dir}")
     print(f"stage1_report: {stage1_report}")
     print(f"stage2_report: {stage2_report}")
     print(f"clusters_stage1: {clusters_json}")
-    print(f"diverse_html: file:///{(seq_dir / 'diverse_target_filters' / 'diverse_target_filters.html').as_posix()}")
-    print(f"diverse_csv: file:///{(seq_dir / 'diverse_target_filters' / 'diverse_target_filters.csv').as_posix()}")
-    print(f"diverse_json: file:///{(seq_dir / 'diverse_target_filters' / 'diverse_target_filters.json').as_posix()}")
+    print(f"diverse_html: file:///{(diverse_dir / 'diverse_target_filters.html').as_posix()}")
+    print(f"diverse_csv: file:///{(diverse_dir / 'diverse_target_filters.csv').as_posix()}")
+    print(f"diverse_json: file:///{diverse_json.as_posix()}")
+    if args.write_catalog_db:
+        print(f"catalog_db_import: {seq_dir / 'import_catalog_db.log'}")
 
     return 0
 
