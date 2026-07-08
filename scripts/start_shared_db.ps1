@@ -18,7 +18,8 @@ $ComposeFile = Join-Path $RepoRoot "infra\postgres\docker-compose.catalog-db.yml
 
 docker compose -f $ComposeFile up -d
 
-$Dsn = "postgresql://$User:$Password@localhost:$Port/$DbName"
+# Use ${...} because PowerShell parses "$User:" as a scoped variable reference.
+$Dsn = "postgresql://${User}:${Password}@localhost:${Port}/${DbName}"
 Write-Host ""
 Write-Host "Shared DB started. For this PC, use:"
 Write-Host "`$env:CATALOG_DB_DSN = `"$Dsn`""
