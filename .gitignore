@@ -1,9 +1,21 @@
-.venv/
+﻿# Python
 __pycache__/
 *.pyc
+.venv/
+venv/
+
+# Local debug / generated artifacts
 local/
-*.log
-.env
-.env.*
+*.sqlite3
+*.db
+
+# Images generated / reports
+**/rendered/
+**/filter_library/
+**/filter_clusters/
+**/target_filter_archive/
+**/target_filter_archive_clean/
+
+# OS
 .DS_Store
 Thumbs.db
