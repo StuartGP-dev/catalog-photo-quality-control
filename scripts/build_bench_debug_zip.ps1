@@ -122,8 +122,8 @@ try {
 
     # Include compact artifacts from stage report directories, excluding rendered images by default.
     $stageLogs = @(
-        Join-Path $SeqDir.FullName "stage1_symmetric_target_hunt.log",
-        Join-Path $SeqDir.FullName "stage2_cluster_aware_hunt.log"
+        (Join-Path $SeqDir.FullName "stage1_symmetric_target_hunt.log"),
+        (Join-Path $SeqDir.FullName "stage2_cluster_aware_hunt.log")
     )
 
     $stageNumber = 0
