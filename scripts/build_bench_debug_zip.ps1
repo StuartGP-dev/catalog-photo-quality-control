@@ -112,7 +112,9 @@ try {
     try { git rev-parse HEAD | Set-Content -Path (Join-Path $TempDir "git_head.txt") -Encoding UTF8 } catch {}
     try { git status --short | Set-Content -Path (Join-Path $TempDir "git_status_short.txt") -Encoding UTF8 } catch {}
     try {
-        python -m common.catalog_photo_control.catalog_db_summary --annonce-key $Listing *> (Join-Path $TempDir "catalog_db_summary.txt")
+        $summaryPath = Join-Path $TempDir "catalog_db_summary.txt"
+        $summaryOutput = & python -m common.catalog_photo_control.catalog_db_summary --annonce-key $Listing 2>&1
+        $summaryOutput | Set-Content -Path $summaryPath -Encoding UTF8
     } catch {
         "catalog_db_summary failed: $($_.Exception.Message)" | Set-Content -Path (Join-Path $TempDir "catalog_db_summary.txt") -Encoding UTF8
     }
