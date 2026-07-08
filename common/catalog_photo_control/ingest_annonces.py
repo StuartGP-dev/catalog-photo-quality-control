@@ -17,6 +17,7 @@ except Exception:  # pragma: no cover
 
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+IGNORED_LEAF_DIR_NAMES = {"autre", "autres", "other", "others"}
 
 
 @dataclass(frozen=True)
@@ -57,9 +58,47 @@ def image_dimensions(path: Path) -> tuple[int | None, int | None]:
         return None, None
 
 
+def is_auxiliary_image_dir(directory: Path) -> bool:
+    return directory.name.strip().lower() in IGNORED_LEAF_DIR_NAMES
+
+
 def list_image_files(directory: Path) -> list[Path]:
-    files = [p for p in directory.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS]
-    return sorted(files, key=lambda p: p.name.lower())
+    """Return only direct production images named 0..N.
+
+    Non-numbered files are ignored. Subfolders are never traversed here, and
+    leaf folders named "autre" / "autres" are treated as helper folders, not
+    real annonces.
+    """
+    if is_auxiliary_image_dir(directory):
+        return []
+
+    numbered: list[tuple[int, Path]] = []
+    seen_numbers: dict[int, Path] = {}
+    for path in directory.iterdir():
+        if not path.is_file() or path.suffix.lower() not in IMAGE_EXTENSIONS:
+            continue
+        if not path.stem.isdigit():
+            continue
+        index = int(path.stem)
+        if index in seen_numbers:
+            other = seen_numbers[index]
+            raise ValueError(
+                f"Images annonce dupliquees pour l'index {index}: {other.name} et {path.name} dans {directory}"
+            )
+        seen_numbers[index] = path
+        numbered.append((index, path))
+
+    numbered.sort(key=lambda item: item[0])
+    indexes = [index for index, _ in numbered]
+    expected = list(range(len(indexes)))
+    if indexes and indexes != expected:
+        missing = sorted(set(range(indexes[-1] + 1)) - set(indexes))
+        raise ValueError(
+            f"Images annonce non contigues dans {directory}. "
+            f"Trouve: {indexes}. Attendu: 0..{len(indexes) - 1}. Manquants: {missing}"
+        )
+
+    return [path for _, path in numbered]
 
 
 def find_annonce_dirs(root: Path) -> Iterable[Path]:
@@ -87,11 +126,11 @@ def annonce_key_for_dir(root: Path, directory: Path) -> str:
 def build_annonce_info(root: Path, directory: Path) -> AnnonceInfo:
     annonce_key = annonce_key_for_dir(root, directory)
     images: list[ImageInfo] = []
-    for index, image_path in enumerate(list_image_files(directory)):
+    for image_index, image_path in ((int(path.stem), path) for path in list_image_files(directory)):
         width, height = image_dimensions(image_path)
         images.append(
             ImageInfo(
-                index=index,
+                index=image_index,
                 path=image_path,
                 sha256=sha256_file(image_path),
                 width=width,
