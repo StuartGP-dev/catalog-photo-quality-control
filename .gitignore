@@ -1,21 +1,43 @@
-﻿# Python
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
 .venv/
 venv/
+ENV/
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
 
 # Local debug / generated artifacts
 local/
 *.sqlite3
+*.sqlite3-*
 *.db
+*.db-*
+*.zip
+*.log
 
-# Images generated / reports
+# Generated reports / images
 **/rendered/
 **/filter_library/
 **/filter_clusters/
 **/target_filter_archive/
 **/target_filter_archive_clean/
+**/diverse_target_filters/
+**/final_filter_library_*/
 
-# OS
+# OS / editors
 .DS_Store
 Thumbs.db
+.vscode/
+.idea/
