@@ -3,3 +3,4 @@ Pillow>=10.0
 ImageHash>=4.3
 psycopg[binary]>=3.2
 python-dotenv>=1.0
+piexif>=1.1.3
