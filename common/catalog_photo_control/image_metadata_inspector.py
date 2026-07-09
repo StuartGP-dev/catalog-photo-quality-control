@@ -3,12 +3,15 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import io
 import json
 import os
+import re
 import shutil
 import subprocess
+import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from PIL import ExifTags, Image, ImageOps
 
@@ -21,6 +24,11 @@ try:  # Pillow exposes JPEG sampling details through this module.
     from PIL import JpegImagePlugin
 except Exception:  # pragma: no cover - Pillow always provides this for JPEG builds.
     JpegImagePlugin = None  # type: ignore
+
+try:  # Pillow can decode ICC profile headers/descriptions when LittleCMS is available.
+    from PIL import ImageCms
+except Exception:  # pragma: no cover - depends on Pillow build.
+    ImageCms = None  # type: ignore
 
 
 EXIF_TAGS_BY_ID = {int(k): str(v) for k, v in ExifTags.TAGS.items()}
@@ -51,6 +59,11 @@ SENSITIVE_TAG_NAMES = {
     "CreatorTool",
     "History",
     "SerialNumber",
+    "OwnerName",
+    "DocumentID",
+    "InstanceID",
+    "OriginalDocumentID",
+    "DerivedFrom",
 }
 
 JPEG_MARKER_NAMES = {
@@ -106,7 +119,6 @@ JPEG_MARKER_NAMES = {
     0xFE: "COM",
 }
 
-
 EXIFTOOL_ARGS = [
     "-j",
     "-G1",
@@ -119,7 +131,6 @@ EXIFTOOL_ARGS = [
     "-validate",
 ]
 
-
 VOLATILE_COMPARE_KEYS = {
     "path",
     "file.mtime_epoch",
@@ -128,7 +139,6 @@ VOLATILE_COMPARE_KEYS = {
     "exiftool.stdout_raw_len",
 }
 
-
 PATH_LIKE_COMPARE_SUFFIXES = (
     ".SourceFile",
     ".File:Directory",
@@ -136,6 +146,8 @@ PATH_LIKE_COMPARE_SUFFIXES = (
     ".System:Directory",
     ".System:FileName",
 )
+
+XMP_PACKET_RE = re.compile(rb"(<\?xpacket[\s\S]{0,500000}?xpacket end=['\"][rw]['\"]\?>|<x:xmpmeta[\s\S]{0,500000}?</x:xmpmeta>)")
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -159,24 +171,34 @@ def _short(value: Any, limit: int = 500) -> Any:
     if isinstance(value, tuple):
         return [_short(v, limit=limit) for v in value]
     if isinstance(value, list):
-        return [_short(v, limit=limit) for v in value[:50]]
+        return [_short(v, limit=limit) for v in value[:100]]
     if isinstance(value, dict):
         return {str(k): _short(v, limit=limit) for k, v in value.items()}
     text = str(value)
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+def _decode_bytes_best_effort(value: bytes, *, limit: int = 2000) -> dict[str, Any]:
+    for encoding in ("utf-8", "utf-16", "latin-1", "ascii"):
+        try:
+            decoded = value.decode(encoding).strip("\x00")
+            if decoded:
+                return {
+                    "kind": "text",
+                    "encoding": encoding,
+                    "length": len(value),
+                    "sha256": _sha256_bytes(value),
+                    "preview": decoded[:limit],
+                }
+        except Exception:
+            continue
+    return {"kind": "bytes", "length": len(value), "sha256": _sha256_bytes(value)}
+
+
 def _decode_exif_value(value: Any) -> Any:
     try:
         if isinstance(value, bytes):
-            for encoding in ("utf-8", "latin-1", "ascii"):
-                try:
-                    decoded = value.decode(encoding).strip("\x00")
-                    if decoded:
-                        return decoded
-                except Exception:
-                    continue
-            return {"kind": "bytes", "length": len(value), "sha256": _sha256_bytes(value)}
+            return _decode_bytes_best_effort(value, limit=600)
         if hasattr(value, "numerator") and hasattr(value, "denominator"):
             return f"{value.numerator}/{value.denominator}"
         if isinstance(value, tuple):
@@ -188,6 +210,12 @@ def _decode_exif_value(value: Any) -> Any:
         return _short(value)
 
 
+def _tag_name(tag_id: int, *, gps: bool = False) -> str:
+    if gps:
+        return GPS_TAGS_BY_ID.get(int(tag_id), str(tag_id))
+    return EXIF_TAGS_BY_ID.get(int(tag_id), str(tag_id))
+
+
 def _extract_pillow_exif(image: Image.Image) -> dict[str, Any]:
     out: dict[str, Any] = {}
     try:
@@ -196,33 +224,69 @@ def _extract_pillow_exif(image: Image.Image) -> dict[str, Any]:
         return out
 
     for tag_id, value in exif.items():
-        name = EXIF_TAGS_BY_ID.get(int(tag_id), str(tag_id))
+        name = _tag_name(int(tag_id))
         if name == "GPSInfo":
             # Expanded below when possible.
             continue
         out[name] = _decode_exif_value(value)
 
-    # Pillow exposes nested IFDs through get_ifd on recent versions.
-    try:
-        gps_ifd = exif.get_ifd(ExifTags.IFD.GPSInfo)  # type: ignore[attr-defined]
-        if gps_ifd:
-            out["GPSInfo"] = {
-                GPS_TAGS_BY_ID.get(int(tag_id), str(tag_id)): _decode_exif_value(value)
-                for tag_id, value in gps_ifd.items()
-            }
-    except Exception:
-        pass
-
-    try:
-        exif_ifd = exif.get_ifd(ExifTags.IFD.Exif)  # type: ignore[attr-defined]
-        if exif_ifd:
-            for tag_id, value in exif_ifd.items():
-                name = EXIF_TAGS_BY_ID.get(int(tag_id), str(tag_id))
-                out.setdefault(name, _decode_exif_value(value))
-    except Exception:
-        pass
+    ifd_enum = getattr(ExifTags, "IFD", None)
+    if ifd_enum is not None:
+        for ifd_name in ("GPSInfo", "Exif", "Interop", "IFD1", "MakerNote"):
+            ifd_id = getattr(ifd_enum, ifd_name, None)
+            if ifd_id is None:
+                continue
+            try:
+                ifd = exif.get_ifd(ifd_id)
+            except Exception:
+                continue
+            if not ifd:
+                continue
+            payload: dict[str, Any] = {}
+            for tag_id, value in ifd.items():
+                payload[_tag_name(int(tag_id), gps=(ifd_name == "GPSInfo"))] = _decode_exif_value(value)
+            out[ifd_name] = payload
 
     return out
+
+
+def _extract_pillow_exif_raw_index(image: Image.Image) -> dict[str, Any]:
+    """Keep numeric tags too, so unknown/private tags are still visible."""
+    try:
+        exif = image.getexif()
+    except Exception:
+        return {}
+    payload: dict[str, Any] = {
+        "tag_count": len(exif),
+        "raw_tags": {},
+        "ifds": {},
+    }
+    for tag_id, value in exif.items():
+        payload["raw_tags"][str(int(tag_id))] = {
+            "name": _tag_name(int(tag_id)),
+            "value": _decode_exif_value(value),
+        }
+
+    ifd_enum = getattr(ExifTags, "IFD", None)
+    if ifd_enum is not None:
+        for ifd_name in ("GPSInfo", "Exif", "Interop", "IFD1", "MakerNote"):
+            ifd_id = getattr(ifd_enum, ifd_name, None)
+            if ifd_id is None:
+                continue
+            try:
+                ifd = exif.get_ifd(ifd_id)
+            except Exception:
+                continue
+            if not ifd:
+                continue
+            payload["ifds"][ifd_name] = {
+                str(int(tag_id)): {
+                    "name": _tag_name(int(tag_id), gps=(ifd_name == "GPSInfo")),
+                    "value": _decode_exif_value(value),
+                }
+                for tag_id, value in ifd.items()
+            }
+    return payload
 
 
 def _extract_piexif_groups(exif_bytes: bytes | None) -> dict[str, Any]:
@@ -255,16 +319,70 @@ def _extract_piexif_groups(exif_bytes: bytes | None) -> dict[str, Any]:
     return groups
 
 
+def _extract_image_info_payload(info: dict[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for key, value in info.items():
+        payload[str(key)] = _short(value, limit=2000)
+    return payload
+
+
 def _extract_xmp_like_info(info: dict[str, Any]) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     for key, value in info.items():
         norm = str(key).lower()
         if "xmp" in norm or "xml" in norm or "iptc" in norm:
-            payload[str(key)] = _short(value)
+            if isinstance(value, bytes):
+                payload[str(key)] = _decode_bytes_best_effort(value, limit=4000)
+            else:
+                payload[str(key)] = _short(value, limit=4000)
     return payload
 
 
-def _ascii_identifier(payload: bytes, limit: int = 80) -> str:
+def _extract_xmp_packets(raw: bytes, image: Image.Image) -> dict[str, Any]:
+    packets = []
+    for idx, match in enumerate(XMP_PACKET_RE.finditer(raw), start=1):
+        packet = match.group(1)
+        decoded = _decode_bytes_best_effort(packet, limit=8000)
+        root_tag = ""
+        namespaces: list[str] = []
+        if decoded.get("kind") == "text":
+            text = str(decoded.get("preview") or "")
+            try:
+                root = ET.fromstring(text.encode("utf-8"))
+                root_tag = str(root.tag)
+                namespaces = sorted({str(elem.tag).split("}")[0].lstrip("{") for elem in root.iter() if "}" in str(elem.tag)})
+            except Exception:
+                pass
+        packets.append(
+            {
+                "index": idx,
+                "offset": match.start(1),
+                "length": len(packet),
+                "sha256": _sha256_bytes(packet),
+                "root_tag": root_tag,
+                "namespaces": namespaces,
+                "decoded": decoded,
+            }
+        )
+
+    pillow_xmp: dict[str, Any] = {}
+    try:
+        getxmp = getattr(image, "getxmp", None)
+        if callable(getxmp):
+            xmp = getxmp()
+            if xmp:
+                pillow_xmp = _short(xmp, limit=4000)
+    except Exception as exc:
+        pillow_xmp = {"_error": str(exc)}
+
+    return {
+        "packet_count": len(packets),
+        "packets": packets,
+        "pillow_getxmp": pillow_xmp,
+    }
+
+
+def _ascii_identifier(payload: bytes, limit: int = 120) -> str:
     raw = payload[:limit]
     chars = []
     for byte in raw:
@@ -275,6 +393,34 @@ def _ascii_identifier(payload: bytes, limit: int = 80) -> str:
         else:
             chars.append(".")
     return "".join(chars)
+
+
+def _classify_jpeg_payload(marker_name: str, payload: bytes) -> str:
+    ident = _ascii_identifier(payload, limit=160)
+    low = ident.lower()
+    if marker_name == "APP0" and ident.startswith("JFIF"):
+        return "JFIF"
+    if marker_name == "APP0" and ident.startswith("JFXX"):
+        return "JFXX_thumbnail"
+    if marker_name == "APP1" and ident.startswith("Exif"):
+        return "EXIF"
+    if marker_name == "APP1" and ("xmp" in low or "adobe:ns:meta" in low):
+        return "XMP"
+    if marker_name == "APP2" and "ICC_PROFILE" in ident:
+        return "ICC_PROFILE"
+    if marker_name == "APP13" and "photoshop" in low:
+        return "Photoshop_IRB_IPTC"
+    if marker_name == "APP14" and ident.startswith("Adobe"):
+        return "Adobe_APP14"
+    if "c2pa" in low:
+        return "C2PA"
+    if "jumbf" in low:
+        return "JUMBF"
+    if marker_name == "COM":
+        return "JPEG_COMMENT"
+    if marker_name.startswith("APP"):
+        return "APP_UNKNOWN"
+    return ""
 
 
 def _jpeg_marker_name(marker: int) -> str:
@@ -366,6 +512,7 @@ def _extract_low_level_jpeg_segments(raw: bytes) -> dict[str, Any]:
         }
         if name.startswith("APP") or name == "COM":
             segment["identifier"] = _ascii_identifier(payload)
+            segment["kind"] = _classify_jpeg_payload(name, payload)
         segments.append(segment)
 
         offset += declared_length
@@ -376,20 +523,51 @@ def _extract_low_level_jpeg_segments(raw: bytes) -> dict[str, Any]:
     app_segments = [segment for segment in segments if str(segment.get("marker", "")).startswith("APP")]
     com_segments = [segment for segment in segments if segment.get("marker") == "COM"]
     identifiers = "\n".join(str(segment.get("identifier", "")) for segment in app_segments + com_segments)
+    app_kind_counts: dict[str, int] = {}
+    for segment in app_segments + com_segments:
+        kind = str(segment.get("kind") or "")
+        if kind:
+            app_kind_counts[kind] = app_kind_counts.get(kind, 0) + 1
     return {
         "is_jpeg_container": True,
         "segment_count": len(segments),
         "marker_counts": marker_counts,
         "app_segment_count": len(app_segments),
         "com_segment_count": len(com_segments),
+        "app_kind_counts": app_kind_counts,
         "entropy_payload_bytes_after_sos": entropy_payload_bytes,
-        "has_app1_exif": any(segment.get("marker") == "APP1" and str(segment.get("identifier", "")).startswith("Exif") for segment in app_segments),
-        "has_app1_xmp": any(segment.get("marker") == "APP1" and "xmp" in str(segment.get("identifier", "")).lower() for segment in app_segments),
-        "has_app2_icc": any(segment.get("marker") == "APP2" and "ICC_PROFILE" in str(segment.get("identifier", "")) for segment in app_segments),
-        "has_app13_photoshop": any(segment.get("marker") == "APP13" and "Photoshop" in str(segment.get("identifier", "")) for segment in app_segments),
+        "has_app1_exif": any(segment.get("kind") == "EXIF" for segment in app_segments),
+        "has_app1_xmp": any(segment.get("kind") == "XMP" for segment in app_segments),
+        "has_app2_icc": any(segment.get("kind") == "ICC_PROFILE" for segment in app_segments),
+        "has_app13_photoshop": any(segment.get("kind") == "Photoshop_IRB_IPTC" for segment in app_segments),
         "has_c2pa_or_jumbf_hint": "c2pa" in identifiers.lower() or "jumbf" in identifiers.lower(),
         "segments": segments,
     }
+
+
+def _extract_pillow_applist(image: Image.Image) -> dict[str, Any]:
+    raw_applist = getattr(image, "applist", None)
+    if not raw_applist:
+        return {"present": False, "count": 0, "items": []}
+    items = []
+    for idx, item in enumerate(raw_applist, start=1):
+        try:
+            marker, payload = item
+            payload_bytes = bytes(payload) if isinstance(payload, (bytes, bytearray)) else bytes(str(payload), "utf-8", errors="replace")
+            marker_name = str(marker)
+            items.append(
+                {
+                    "index": idx,
+                    "marker": marker_name,
+                    "kind": _classify_jpeg_payload(marker_name, payload_bytes),
+                    "length": len(payload_bytes),
+                    "sha256": _sha256_bytes(payload_bytes),
+                    "identifier": _ascii_identifier(payload_bytes),
+                }
+            )
+        except Exception as exc:
+            items.append({"index": idx, "error": str(exc), "raw": _short(item)})
+    return {"present": True, "count": len(items), "items": items}
 
 
 def _jpeg_encoder_details(image: Image.Image) -> dict[str, Any]:
@@ -410,13 +588,127 @@ def _jpeg_encoder_details(image: Image.Image) -> dict[str, Any]:
     except Exception as exc:
         details["subsampling_error"] = str(exc)
 
+    for attr in ("layer", "layers", "progression", "progressive"):
+        try:
+            value = getattr(image, attr, None)
+            if value is not None:
+                details[attr] = _short(value, limit=1200)
+        except Exception:
+            pass
+
+    return details
+
+
+def _icc_header_ascii(raw: bytes, start: int, end: int) -> str:
+    part = raw[start:end]
+    return "".join(chr(b) if 32 <= b <= 126 else "." for b in part).strip(".")
+
+
+def _extract_icc_profile_details(icc: bytes | None) -> dict[str, Any]:
+    if not icc:
+        return {"present": False}
+    details: dict[str, Any] = {
+        "present": True,
+        "length": len(icc),
+        "sha256": _sha256_bytes(icc),
+    }
+    if len(icc) >= 128:
+        try:
+            details["header"] = {
+                "declared_size": int.from_bytes(icc[0:4], "big"),
+                "preferred_cmm_type": _icc_header_ascii(icc, 4, 8),
+                "version_raw_hex": icc[8:12].hex(),
+                "profile_device_class": _icc_header_ascii(icc, 12, 16),
+                "color_space": _icc_header_ascii(icc, 16, 20),
+                "pcs": _icc_header_ascii(icc, 20, 24),
+                "created_year": int.from_bytes(icc[24:26], "big"),
+                "created_month": int.from_bytes(icc[26:28], "big"),
+                "created_day": int.from_bytes(icc[28:30], "big"),
+                "created_hour": int.from_bytes(icc[30:32], "big"),
+                "created_minute": int.from_bytes(icc[32:34], "big"),
+                "created_second": int.from_bytes(icc[34:36], "big"),
+                "signature": _icc_header_ascii(icc, 36, 40),
+                "primary_platform": _icc_header_ascii(icc, 40, 44),
+                "flags_hex": icc[44:48].hex(),
+                "device_manufacturer": _icc_header_ascii(icc, 48, 52),
+                "device_model": _icc_header_ascii(icc, 52, 56),
+                "rendering_intent": int.from_bytes(icc[64:68], "big"),
+                "profile_creator": _icc_header_ascii(icc, 80, 84),
+            }
+        except Exception as exc:
+            details["header_error"] = str(exc)
+    if len(icc) >= 132:
+        try:
+            tag_count = int.from_bytes(icc[128:132], "big")
+            tags = []
+            for idx in range(min(tag_count, 80)):
+                off = 132 + idx * 12
+                if off + 12 > len(icc):
+                    break
+                sig = _icc_header_ascii(icc, off, off + 4)
+                data_offset = int.from_bytes(icc[off + 4 : off + 8], "big")
+                data_size = int.from_bytes(icc[off + 8 : off + 12], "big")
+                tags.append({"signature": sig, "offset": data_offset, "size": data_size})
+            details["tag_table"] = {"count": tag_count, "tags": tags}
+        except Exception as exc:
+            details["tag_table_error"] = str(exc)
+
+    if ImageCms is not None:
+        try:
+            profile = ImageCms.ImageCmsProfile(io.BytesIO(icc))
+            inner = getattr(profile, "profile", None)
+            cms_payload: dict[str, Any] = {}
+            for attr in (
+                "profile_description",
+                "manufacturer",
+                "model",
+                "copyright",
+                "icc_version",
+                "device_class",
+                "xcolor_space",
+                "connection_space",
+                "rendering_intent",
+            ):
+                try:
+                    value = getattr(inner, attr, None) if inner is not None else getattr(profile, attr, None)
+                    if value not in (None, ""):
+                        cms_payload[attr] = _short(value, limit=1200)
+                except Exception:
+                    pass
+            details["imagecms"] = cms_payload
+        except Exception as exc:
+            details["imagecms_error"] = str(exc)
+    return details
+
+
+def _extract_pillow_core_details(image: Image.Image, transposed: Image.Image, info: dict[str, Any]) -> dict[str, Any]:
+    details: dict[str, Any] = {
+        "format": image.format,
+        "format_description": getattr(image, "format_description", ""),
+        "mime": "",
+        "mode": image.mode,
+        "bands": list(image.getbands()),
+        "size": list(image.size),
+        "transposed_size": list(transposed.size),
+        "readonly": bool(getattr(image, "readonly", False)),
+        "is_animated": bool(getattr(image, "is_animated", False)),
+        "n_frames": int(getattr(image, "n_frames", 1)),
+        "has_palette": image.palette is not None,
+        "has_transparency_info": "transparency" in info,
+        "info_keys": sorted(str(k) for k in info.keys()),
+        "tile": _short(getattr(image, "tile", None), limit=1200),
+        "encoderinfo": _short(getattr(image, "encoderinfo", None), limit=1200),
+    }
     try:
-        layer = getattr(image, "layer", None)
-        if layer is not None:
-            details["layer"] = _short(layer)
+        get_format_mimetype = getattr(image, "get_format_mimetype", None)
+        if callable(get_format_mimetype):
+            details["mime"] = str(get_format_mimetype() or "")
     except Exception:
         pass
-
+    try:
+        details["extrema"] = _short(image.getextrema(), limit=1200)
+    except Exception:
+        pass
     return details
 
 
@@ -498,7 +790,7 @@ def _run_exiftool(path: Path, *, use_exiftool: bool, exiftool_path: str | None =
         "parse_error": parse_error,
         "tag_count": len(tags),
         "group_counts": group_counts,
-        "tags": _short(tags, limit=2000),
+        "tags": _short(tags, limit=4000),
     }
 
 
@@ -527,6 +819,7 @@ def inspect_image_metadata(
                 "suffix": path.suffix,
                 "size_bytes": stat.st_size,
                 "mtime_epoch": stat.st_mtime,
+                "ctime_epoch": stat.st_ctime,
                 "sha256": _sha256_file(path),
             },
             "image": {
@@ -540,6 +833,8 @@ def inspect_image_metadata(
                 "is_animated": bool(getattr(image, "is_animated", False)),
                 "n_frames": int(getattr(image, "n_frames", 1)),
             },
+            "pillow_core": _extract_pillow_core_details(image, transposed, info),
+            "pillow_info": _extract_image_info_payload(info),
             "container": {
                 "exif_present": bool(exif_bytes),
                 "exif_length": len(exif_bytes) if exif_bytes else 0,
@@ -551,13 +846,17 @@ def inspect_image_metadata(
                 "jfif": _short({k: info.get(k) for k in info if str(k).lower().startswith("jfif")}),
                 "progressive": _short(info.get("progressive")),
             },
+            "icc_profile": _extract_icc_profile_details(icc),
             "jpeg": {
                 "low_level_segments": _extract_low_level_jpeg_segments(raw),
+                "pillow_applist": _extract_pillow_applist(image),
                 "encoder_details": _jpeg_encoder_details(image),
             },
             "pillow_exif": _extract_pillow_exif(image),
+            "pillow_exif_raw_index": _extract_pillow_exif_raw_index(image),
             "piexif_groups": _extract_piexif_groups(exif_bytes),
             "xmp_like_info": _extract_xmp_like_info(info),
+            "xmp_packets": _extract_xmp_packets(raw, image),
             "exiftool": _run_exiftool(
                 path,
                 use_exiftool=use_exiftool,
@@ -586,10 +885,13 @@ def build_metadata_risk_summary(metadata: dict[str, Any]) -> dict[str, Any]:
     flat = _flatten(
         {
             "pillow_exif": metadata.get("pillow_exif", {}),
+            "pillow_exif_raw_index": metadata.get("pillow_exif_raw_index", {}),
             "piexif_groups": metadata.get("piexif_groups", {}),
             "xmp_like_info": metadata.get("xmp_like_info", {}),
+            "xmp_packets": metadata.get("xmp_packets", {}),
             "exiftool": metadata.get("exiftool", {}).get("tags", {}),
             "jpeg": metadata.get("jpeg", {}).get("low_level_segments", {}),
+            "icc_profile": metadata.get("icc_profile", {}),
         }
     )
     sensitive_hits = []
@@ -603,6 +905,9 @@ def build_metadata_risk_summary(metadata: dict[str, Any]) -> dict[str, Any]:
             or "GPS" in key
             or "Serial" in key
             or "History" in key
+            or "DocumentID" in key
+            or "InstanceID" in key
+            or "DerivedFrom" in key
             or "C2PA" in key.upper()
             or "JUMBF" in key.upper()
         ):
@@ -613,7 +918,7 @@ def build_metadata_risk_summary(metadata: dict[str, Any]) -> dict[str, Any]:
         "has_exif": bool(metadata.get("container", {}).get("exif_present")) or bool(jpeg_segments.get("has_app1_exif")),
         "has_gps": any("GPS" in hit for hit in sensitive_hits),
         "has_icc_profile": bool(metadata.get("container", {}).get("icc_profile_present")) or bool(jpeg_segments.get("has_app2_icc")),
-        "has_xmp_like_info": bool(metadata.get("xmp_like_info")) or bool(jpeg_segments.get("has_app1_xmp")),
+        "has_xmp_like_info": bool(metadata.get("xmp_like_info")) or bool(jpeg_segments.get("has_app1_xmp")) or bool(metadata.get("xmp_packets", {}).get("packet_count")),
         "has_photoshop_metadata": bool(jpeg_segments.get("has_app13_photoshop")),
         "has_c2pa_or_jumbf_hint": bool(jpeg_segments.get("has_c2pa_or_jumbf_hint")),
         "sensitive_tag_paths": sorted(sensitive_hits),
@@ -623,38 +928,46 @@ def build_metadata_risk_summary(metadata: dict[str, Any]) -> dict[str, Any]:
 def _skip_compare_key(key: str) -> bool:
     if key in VOLATILE_COMPARE_KEYS:
         return True
-    if key.startswith("file.mtime_epoch"):
+    if key.startswith("file.mtime_epoch") or key.startswith("file.ctime_epoch"):
         return True
     if any(key.endswith(suffix) for suffix in PATH_LIKE_COMPARE_SUFFIXES):
         return True
     return False
 
 
-def _comparison_summary(left_flat: dict[str, str], right_flat: dict[str, str], same_keys: list[str], differences: list[dict[str, str]]) -> dict[str, Any]:
+def _comparison_summary(left_flat: dict[str, str], right_flat: dict[str, str], same_items: list[dict[str, str]], differences: list[dict[str, str]]) -> dict[str, Any]:
+    same_keys = [item["key"] for item in same_items]
     original_only = [diff["key"] for diff in differences if diff.get("filtered", "") == ""]
     filtered_only = [diff["key"] for diff in differences if diff.get("original", "") == ""]
     changed = [diff["key"] for diff in differences if diff.get("original", "") != "" and diff.get("filtered", "") != ""]
     same_important_prefixes = (
         "image.",
+        "pillow_core.",
         "container.",
+        "icc_profile.",
         "jpeg.low_level_segments.marker_counts",
+        "jpeg.low_level_segments.app_kind_counts",
         "jpeg.low_level_segments.has_",
         "jpeg.encoder_details.",
+        "jpeg.pillow_applist.",
+        "xmp_packets.",
         "exiftool.tags.",
     )
-    important_same = [key for key in same_keys if key.startswith(same_important_prefixes)]
+    important_same = [item for item in same_items if item["key"].startswith(same_important_prefixes)]
     return {
         "original_key_count": len(left_flat),
         "filtered_key_count": len(right_flat),
-        "same_key_count": len(same_keys),
+        "same_key_count": len(same_items),
         "different_key_count": len(differences),
         "original_only_count": len(original_only),
         "filtered_only_count": len(filtered_only),
         "changed_value_count": len(changed),
-        "important_same_keys": important_same[:120],
-        "original_only_keys_sample": original_only[:120],
-        "filtered_only_keys_sample": filtered_only[:120],
-        "changed_keys_sample": changed[:120],
+        "important_same_items": important_same[:160],
+        "important_same_keys": [item["key"] for item in important_same[:160]],
+        "original_only_keys_sample": original_only[:160],
+        "filtered_only_keys_sample": filtered_only[:160],
+        "changed_keys_sample": changed[:160],
+        "same_keys_sample": same_keys[:160],
     }
 
 
@@ -682,23 +995,24 @@ def compare_metadata(
     right_flat = _flatten(right)
     keys = sorted(set(left_flat) | set(right_flat))
     differences = []
-    same = []
+    same_items = []
     for key in keys:
         if _skip_compare_key(key):
             continue
         a = left_flat.get(key, "")
         b = right_flat.get(key, "")
         if a == b:
-            same.append(key)
+            same_items.append({"key": key, "value": a})
         else:
             differences.append({"key": key, "original": a, "filtered": b})
-    summary = _comparison_summary(left_flat, right_flat, same, differences)
+    summary = _comparison_summary(left_flat, right_flat, same_items, differences)
     return {
         "original": left,
         "filtered": right,
-        "same_key_count": len(same),
+        "same_key_count": len(same_items),
         "different_key_count": len(differences),
-        "same_keys": same,
+        "same_keys": [item["key"] for item in same_items],
+        "same_items": same_items,
         "differences": differences,
         "similarity_summary": summary,
     }
@@ -741,11 +1055,11 @@ def write_diff_csv(comparisons: list[dict[str, Any]], output_csv: Path) -> None:
 def write_same_csv(comparisons: list[dict[str, Any]], output_csv: Path) -> None:
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     with output_csv.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["pair_index", "key"])
+        writer = csv.DictWriter(f, fieldnames=["pair_index", "key", "value"])
         writer.writeheader()
         for idx, comparison in enumerate(comparisons, start=1):
-            for key in comparison.get("same_keys", []):
-                writer.writerow({"pair_index": idx, "key": key})
+            for item in comparison.get("same_items", []):
+                writer.writerow({"pair_index": idx, "key": item.get("key", ""), "value": item.get("value", "")})
 
 
 def inspect_export_dir(
@@ -797,26 +1111,34 @@ def print_summary(report: dict[str, Any]) -> None:
         print(f"filtered_sha256: {filtered['file']['sha256']}")
         print(f"size: {original['image']['width']}x{original['image']['height']} -> {filtered['image']['width']}x{filtered['image']['height']}")
         print(f"format/mode: {original['image']['format']}/{original['image']['mode']} -> {filtered['image']['format']}/{filtered['image']['mode']}")
+        print(f"mime: {original['pillow_core'].get('mime', '')} -> {filtered['pillow_core'].get('mime', '')}")
+        print(f"bands: {original['pillow_core'].get('bands', [])} -> {filtered['pillow_core'].get('bands', [])}")
         print(f"exif_present: {original['container']['exif_present']} -> {filtered['container']['exif_present']}")
         print(f"icc_present: {original['container']['icc_profile_present']} -> {filtered['container']['icc_profile_present']}")
-        print(f"xmp_like_present: {bool(original['xmp_like_info'])} -> {bool(filtered['xmp_like_info'])}")
+        print(f"xmp_like_present: {bool(original['xmp_like_info']) or bool(original.get('xmp_packets', {}).get('packet_count'))} -> {bool(filtered['xmp_like_info']) or bool(filtered.get('xmp_packets', {}).get('packet_count'))}")
+        print(f"xmp_packet_count: {original.get('xmp_packets', {}).get('packet_count', 0)} -> {filtered.get('xmp_packets', {}).get('packet_count', 0)}")
         print(f"gps_present: {original['risk_summary']['has_gps']} -> {filtered['risk_summary']['has_gps']}")
         print(f"photoshop_metadata: {original['risk_summary']['has_photoshop_metadata']} -> {filtered['risk_summary']['has_photoshop_metadata']}")
         print(f"c2pa_or_jumbf_hint: {original['risk_summary']['has_c2pa_or_jumbf_hint']} -> {filtered['risk_summary']['has_c2pa_or_jumbf_hint']}")
         print(f"jpeg_app_segments: {original['jpeg']['low_level_segments']['app_segment_count']} -> {filtered['jpeg']['low_level_segments']['app_segment_count']}")
+        print(f"jpeg_app_kinds: {original['jpeg']['low_level_segments'].get('app_kind_counts', {})} -> {filtered['jpeg']['low_level_segments'].get('app_kind_counts', {})}")
         print(f"jpeg_com_segments: {original['jpeg']['low_level_segments']['com_segment_count']} -> {filtered['jpeg']['low_level_segments']['com_segment_count']}")
         print(f"jpeg_quantization_sha256: {original['jpeg']['encoder_details'].get('quantization_sha256', '')} -> {filtered['jpeg']['encoder_details'].get('quantization_sha256', '')}")
+        print(f"jpeg_subsampling: {original['jpeg']['encoder_details'].get('subsampling', '')} -> {filtered['jpeg']['encoder_details'].get('subsampling', '')}")
+        if original.get("icc_profile", {}).get("present") or filtered.get("icc_profile", {}).get("present"):
+            print(f"icc_description: {original.get('icc_profile', {}).get('imagecms', {}).get('profile_description', '')} -> {filtered.get('icc_profile', {}).get('imagecms', {}).get('profile_description', '')}")
         if original_exiftool.get("enabled") or filtered_exiftool.get("enabled"):
             print(f"exiftool_available: {original_exiftool.get('available')} -> {filtered_exiftool.get('available')}")
             print(f"exiftool_tag_count: {original_exiftool.get('tag_count', 0)} -> {filtered_exiftool.get('tag_count', 0)}")
+            print(f"exiftool_group_counts: {original_exiftool.get('group_counts', {})} -> {filtered_exiftool.get('group_counts', {})}")
         print(f"sensitive_tags_original: {len(original['risk_summary']['sensitive_tag_paths'])}")
         print(f"sensitive_tags_filtered: {len(filtered['risk_summary']['sensitive_tag_paths'])}")
         print(f"same_keys: {comparison['same_key_count']}")
         print(f"different_keys: {comparison['different_key_count']}")
-        if summary.get("important_same_keys"):
-            print("important_same_keys_sample:")
-            for key in summary["important_same_keys"][:12]:
-                print(f"  SAME: {key}")
+        if summary.get("important_same_items"):
+            print("important_same_items_sample:")
+            for item in summary["important_same_items"][:14]:
+                print(f"  SAME: {item.get('key')} = {item.get('value')}")
 
 
 def build_parser() -> argparse.ArgumentParser:
