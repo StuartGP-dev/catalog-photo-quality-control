@@ -5,7 +5,8 @@ import csv
 import hashlib
 import json
 import os
-from dataclasses import dataclass
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -15,6 +16,11 @@ try:  # optional but installed through requirements for richer EXIF group parsin
     import piexif  # type: ignore
 except Exception:  # pragma: no cover - optional dependency guard
     piexif = None  # type: ignore
+
+try:  # Pillow exposes JPEG sampling details through this module.
+    from PIL import JpegImagePlugin
+except Exception:  # pragma: no cover - Pillow always provides this for JPEG builds.
+    JpegImagePlugin = None  # type: ignore
 
 
 EXIF_TAGS_BY_ID = {int(k): str(v) for k, v in ExifTags.TAGS.items()}
@@ -42,7 +48,94 @@ SENSITIVE_TAG_NAMES = {
     "ProcessingSoftware",
     "Artist",
     "Copyright",
+    "CreatorTool",
+    "History",
+    "SerialNumber",
 }
+
+JPEG_MARKER_NAMES = {
+    0x01: "TEM",
+    0xC0: "SOF0_baseline",
+    0xC1: "SOF1_extended_sequential",
+    0xC2: "SOF2_progressive",
+    0xC3: "SOF3_lossless",
+    0xC4: "DHT",
+    0xC5: "SOF5_differential_sequential",
+    0xC6: "SOF6_differential_progressive",
+    0xC7: "SOF7_differential_lossless",
+    0xC8: "JPG",
+    0xC9: "SOF9_arithmetic_sequential",
+    0xCA: "SOF10_arithmetic_progressive",
+    0xCB: "SOF11_arithmetic_lossless",
+    0xCC: "DAC",
+    0xCD: "SOF13_differential_arithmetic_sequential",
+    0xCE: "SOF14_differential_arithmetic_progressive",
+    0xCF: "SOF15_differential_arithmetic_lossless",
+    0xD0: "RST0",
+    0xD1: "RST1",
+    0xD2: "RST2",
+    0xD3: "RST3",
+    0xD4: "RST4",
+    0xD5: "RST5",
+    0xD6: "RST6",
+    0xD7: "RST7",
+    0xD8: "SOI",
+    0xD9: "EOI",
+    0xDA: "SOS",
+    0xDB: "DQT",
+    0xDC: "DNL",
+    0xDD: "DRI",
+    0xDE: "DHP",
+    0xDF: "EXP",
+    0xE0: "APP0",
+    0xE1: "APP1",
+    0xE2: "APP2",
+    0xE3: "APP3",
+    0xE4: "APP4",
+    0xE5: "APP5",
+    0xE6: "APP6",
+    0xE7: "APP7",
+    0xE8: "APP8",
+    0xE9: "APP9",
+    0xEA: "APP10",
+    0xEB: "APP11",
+    0xEC: "APP12",
+    0xED: "APP13",
+    0xEE: "APP14",
+    0xEF: "APP15",
+    0xFE: "COM",
+}
+
+
+EXIFTOOL_ARGS = [
+    "-j",
+    "-G1",
+    "-a",
+    "-s",
+    "-ee",
+    "-u",
+    "-api",
+    "LargeFileSupport=1",
+    "-validate",
+]
+
+
+VOLATILE_COMPARE_KEYS = {
+    "path",
+    "file.mtime_epoch",
+    "exiftool.command",
+    "exiftool.stderr",
+    "exiftool.stdout_raw_len",
+}
+
+
+PATH_LIKE_COMPARE_SUFFIXES = (
+    ".SourceFile",
+    ".File:Directory",
+    ".File:FileName",
+    ".System:Directory",
+    ".System:FileName",
+)
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -171,7 +264,251 @@ def _extract_xmp_like_info(info: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def inspect_image_metadata(path: Path) -> dict[str, Any]:
+def _ascii_identifier(payload: bytes, limit: int = 80) -> str:
+    raw = payload[:limit]
+    chars = []
+    for byte in raw:
+        if 32 <= byte <= 126:
+            chars.append(chr(byte))
+        elif byte == 0:
+            chars.append("\\0")
+        else:
+            chars.append(".")
+    return "".join(chars)
+
+
+def _jpeg_marker_name(marker: int) -> str:
+    return JPEG_MARKER_NAMES.get(marker, f"0xFF{marker:02X}")
+
+
+def _extract_low_level_jpeg_segments(raw: bytes) -> dict[str, Any]:
+    if len(raw) < 4 or raw[:2] != b"\xff\xd8":
+        return {
+            "is_jpeg_container": False,
+            "segment_count": 0,
+            "marker_counts": {},
+            "segments": [],
+        }
+
+    segments: list[dict[str, Any]] = [
+        {"marker": "SOI", "code": "0xFFD8", "offset": 0, "length": 0, "payload_length": 0}
+    ]
+    marker_counts: dict[str, int] = {"SOI": 1}
+    offset = 2
+    entropy_payload_bytes = 0
+
+    while offset < len(raw):
+        ff = raw.find(b"\xff", offset)
+        if ff < 0 or ff + 1 >= len(raw):
+            break
+        marker_pos = ff
+        marker_offset = ff + 1
+        while marker_offset < len(raw) and raw[marker_offset] == 0xFF:
+            marker_offset += 1
+        if marker_offset >= len(raw):
+            break
+        marker = raw[marker_offset]
+        offset = marker_offset + 1
+        if marker == 0x00:
+            # Escaped 0xFF inside entropy-coded data.
+            continue
+
+        name = _jpeg_marker_name(marker)
+        marker_counts[name] = marker_counts.get(name, 0) + 1
+
+        if marker in {0xD8, 0xD9, 0x01} or 0xD0 <= marker <= 0xD7:
+            segments.append(
+                {
+                    "marker": name,
+                    "code": f"0xFF{marker:02X}",
+                    "offset": marker_pos,
+                    "length": 0,
+                    "payload_length": 0,
+                }
+            )
+            if marker == 0xD9:
+                break
+            continue
+
+        if offset + 2 > len(raw):
+            segments.append(
+                {
+                    "marker": name,
+                    "code": f"0xFF{marker:02X}",
+                    "offset": marker_pos,
+                    "error": "missing_length",
+                }
+            )
+            break
+
+        declared_length = int.from_bytes(raw[offset : offset + 2], "big")
+        if declared_length < 2:
+            segments.append(
+                {
+                    "marker": name,
+                    "code": f"0xFF{marker:02X}",
+                    "offset": marker_pos,
+                    "length": declared_length,
+                    "error": "invalid_length",
+                }
+            )
+            break
+        payload_start = offset + 2
+        payload_end = min(len(raw), offset + declared_length)
+        payload = raw[payload_start:payload_end]
+        segment = {
+            "marker": name,
+            "code": f"0xFF{marker:02X}",
+            "offset": marker_pos,
+            "length": declared_length,
+            "payload_length": len(payload),
+            "payload_sha256": _sha256_bytes(payload) if payload else "",
+        }
+        if name.startswith("APP") or name == "COM":
+            segment["identifier"] = _ascii_identifier(payload)
+        segments.append(segment)
+
+        offset += declared_length
+        if marker == 0xDA:
+            entropy_payload_bytes = max(0, len(raw) - offset)
+            break
+
+    app_segments = [segment for segment in segments if str(segment.get("marker", "")).startswith("APP")]
+    com_segments = [segment for segment in segments if segment.get("marker") == "COM"]
+    identifiers = "\n".join(str(segment.get("identifier", "")) for segment in app_segments + com_segments)
+    return {
+        "is_jpeg_container": True,
+        "segment_count": len(segments),
+        "marker_counts": marker_counts,
+        "app_segment_count": len(app_segments),
+        "com_segment_count": len(com_segments),
+        "entropy_payload_bytes_after_sos": entropy_payload_bytes,
+        "has_app1_exif": any(segment.get("marker") == "APP1" and str(segment.get("identifier", "")).startswith("Exif") for segment in app_segments),
+        "has_app1_xmp": any(segment.get("marker") == "APP1" and "xmp" in str(segment.get("identifier", "")).lower() for segment in app_segments),
+        "has_app2_icc": any(segment.get("marker") == "APP2" and "ICC_PROFILE" in str(segment.get("identifier", "")) for segment in app_segments),
+        "has_app13_photoshop": any(segment.get("marker") == "APP13" and "Photoshop" in str(segment.get("identifier", "")) for segment in app_segments),
+        "has_c2pa_or_jumbf_hint": "c2pa" in identifiers.lower() or "jumbf" in identifiers.lower(),
+        "segments": segments,
+    }
+
+
+def _jpeg_encoder_details(image: Image.Image) -> dict[str, Any]:
+    details: dict[str, Any] = {}
+    quantization = getattr(image, "quantization", None)
+    if isinstance(quantization, dict) and quantization:
+        normalized = {str(k): list(v) for k, v in quantization.items()}
+        details["quantization_table_count"] = len(normalized)
+        details["quantization_sha256"] = _sha256_bytes(json.dumps(normalized, sort_keys=True).encode("utf-8"))
+        details["quantization_tables"] = normalized
+    else:
+        details["quantization_table_count"] = 0
+        details["quantization_sha256"] = ""
+
+    try:
+        if JpegImagePlugin is not None and hasattr(JpegImagePlugin, "get_sampling"):
+            details["subsampling"] = JpegImagePlugin.get_sampling(image)  # type: ignore[attr-defined]
+    except Exception as exc:
+        details["subsampling_error"] = str(exc)
+
+    try:
+        layer = getattr(image, "layer", None)
+        if layer is not None:
+            details["layer"] = _short(layer)
+    except Exception:
+        pass
+
+    return details
+
+
+def _find_exiftool(exiftool_path: str | None = None) -> str | None:
+    if exiftool_path:
+        candidate = Path(exiftool_path)
+        if candidate.exists():
+            return str(candidate)
+        found = shutil.which(exiftool_path)
+        if found:
+            return found
+        return None
+
+    for name in ("exiftool", "exiftool.exe"):
+        found = shutil.which(name)
+        if found:
+            return found
+
+    common_windows_paths = [
+        Path("C:/Windows/exiftool.exe"),
+        Path("C:/Program Files/ExifTool/exiftool.exe"),
+        Path("C:/Program Files (x86)/ExifTool/exiftool.exe"),
+    ]
+    for candidate in common_windows_paths:
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def _run_exiftool(path: Path, *, use_exiftool: bool, exiftool_path: str | None = None, require_exiftool: bool = False) -> dict[str, Any]:
+    if not use_exiftool and not require_exiftool:
+        return {"enabled": False, "available": False}
+
+    executable = _find_exiftool(exiftool_path)
+    if not executable:
+        if require_exiftool:
+            raise RuntimeError("ExifTool introuvable. Installe ExifTool ou passe --exiftool-path.")
+        return {"enabled": True, "available": False, "error": "exiftool_not_found"}
+
+    cmd = [executable, *EXIFTOOL_ARGS, str(path)]
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=90,
+            check=False,
+        )
+    except Exception as exc:
+        if require_exiftool:
+            raise
+        return {"enabled": True, "available": True, "executable": executable, "error": str(exc)}
+
+    tags: dict[str, Any] = {}
+    parse_error = ""
+    try:
+        parsed = json.loads(proc.stdout or "[]")
+        if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
+            tags = parsed[0]
+    except Exception as exc:
+        parse_error = str(exc)
+
+    group_counts: dict[str, int] = {}
+    for key in tags:
+        group = str(key).split(":", 1)[0] if ":" in str(key) else "Ungrouped"
+        group_counts[group] = group_counts.get(group, 0) + 1
+
+    return {
+        "enabled": True,
+        "available": True,
+        "executable": executable,
+        "exit_code": proc.returncode,
+        "command": " ".join(cmd),
+        "stderr": proc.stderr.strip(),
+        "stdout_raw_len": len(proc.stdout or ""),
+        "parse_error": parse_error,
+        "tag_count": len(tags),
+        "group_counts": group_counts,
+        "tags": _short(tags, limit=2000),
+    }
+
+
+def inspect_image_metadata(
+    path: Path,
+    *,
+    use_exiftool: bool = False,
+    exiftool_path: str | None = None,
+    require_exiftool: bool = False,
+) -> dict[str, Any]:
     path = Path(path)
     if not path.exists() or not path.is_file():
         raise FileNotFoundError(path)
@@ -214,9 +551,19 @@ def inspect_image_metadata(path: Path) -> dict[str, Any]:
                 "jfif": _short({k: info.get(k) for k in info if str(k).lower().startswith("jfif")}),
                 "progressive": _short(info.get("progressive")),
             },
+            "jpeg": {
+                "low_level_segments": _extract_low_level_jpeg_segments(raw),
+                "encoder_details": _jpeg_encoder_details(image),
+            },
             "pillow_exif": _extract_pillow_exif(image),
             "piexif_groups": _extract_piexif_groups(exif_bytes),
             "xmp_like_info": _extract_xmp_like_info(info),
+            "exiftool": _run_exiftool(
+                path,
+                use_exiftool=use_exiftool,
+                exiftool_path=exiftool_path,
+                require_exiftool=require_exiftool,
+            ),
         }
     metadata["risk_summary"] = build_metadata_risk_summary(metadata)
     return metadata
@@ -236,32 +583,108 @@ def _flatten(obj: Any, prefix: str = "") -> dict[str, str]:
 
 
 def build_metadata_risk_summary(metadata: dict[str, Any]) -> dict[str, Any]:
-    flat = _flatten({"pillow_exif": metadata.get("pillow_exif", {}), "piexif_groups": metadata.get("piexif_groups", {}), "xmp_like_info": metadata.get("xmp_like_info", {})})
+    flat = _flatten(
+        {
+            "pillow_exif": metadata.get("pillow_exif", {}),
+            "piexif_groups": metadata.get("piexif_groups", {}),
+            "xmp_like_info": metadata.get("xmp_like_info", {}),
+            "exiftool": metadata.get("exiftool", {}).get("tags", {}),
+            "jpeg": metadata.get("jpeg", {}).get("low_level_segments", {}),
+        }
+    )
     sensitive_hits = []
     for key, value in flat.items():
         leaf = key.split(".")[-1]
-        if leaf in SENSITIVE_TAG_NAMES or leaf.startswith("GPS") or "GPS" in key or "Serial" in key or "History" in key:
-            if value not in ("", "None", "{}", "[]"):
+        leaf_no_group = leaf.split(":")[-1]
+        if (
+            leaf in SENSITIVE_TAG_NAMES
+            or leaf_no_group in SENSITIVE_TAG_NAMES
+            or leaf.startswith("GPS")
+            or "GPS" in key
+            or "Serial" in key
+            or "History" in key
+            or "C2PA" in key.upper()
+            or "JUMBF" in key.upper()
+        ):
+            if value not in ("", "None", "{}", "[]", "False", "0"):
                 sensitive_hits.append(key)
+    jpeg_segments = metadata.get("jpeg", {}).get("low_level_segments", {})
     return {
-        "has_exif": bool(metadata.get("container", {}).get("exif_present")),
+        "has_exif": bool(metadata.get("container", {}).get("exif_present")) or bool(jpeg_segments.get("has_app1_exif")),
         "has_gps": any("GPS" in hit for hit in sensitive_hits),
-        "has_icc_profile": bool(metadata.get("container", {}).get("icc_profile_present")),
-        "has_xmp_like_info": bool(metadata.get("xmp_like_info")),
+        "has_icc_profile": bool(metadata.get("container", {}).get("icc_profile_present")) or bool(jpeg_segments.get("has_app2_icc")),
+        "has_xmp_like_info": bool(metadata.get("xmp_like_info")) or bool(jpeg_segments.get("has_app1_xmp")),
+        "has_photoshop_metadata": bool(jpeg_segments.get("has_app13_photoshop")),
+        "has_c2pa_or_jumbf_hint": bool(jpeg_segments.get("has_c2pa_or_jumbf_hint")),
         "sensitive_tag_paths": sorted(sensitive_hits),
     }
 
 
-def compare_metadata(original: Path, filtered: Path) -> dict[str, Any]:
-    left = inspect_image_metadata(original)
-    right = inspect_image_metadata(filtered)
+def _skip_compare_key(key: str) -> bool:
+    if key in VOLATILE_COMPARE_KEYS:
+        return True
+    if key.startswith("file.mtime_epoch"):
+        return True
+    if any(key.endswith(suffix) for suffix in PATH_LIKE_COMPARE_SUFFIXES):
+        return True
+    return False
+
+
+def _comparison_summary(left_flat: dict[str, str], right_flat: dict[str, str], same_keys: list[str], differences: list[dict[str, str]]) -> dict[str, Any]:
+    original_only = [diff["key"] for diff in differences if diff.get("filtered", "") == ""]
+    filtered_only = [diff["key"] for diff in differences if diff.get("original", "") == ""]
+    changed = [diff["key"] for diff in differences if diff.get("original", "") != "" and diff.get("filtered", "") != ""]
+    same_important_prefixes = (
+        "image.",
+        "container.",
+        "jpeg.low_level_segments.marker_counts",
+        "jpeg.low_level_segments.has_",
+        "jpeg.encoder_details.",
+        "exiftool.tags.",
+    )
+    important_same = [key for key in same_keys if key.startswith(same_important_prefixes)]
+    return {
+        "original_key_count": len(left_flat),
+        "filtered_key_count": len(right_flat),
+        "same_key_count": len(same_keys),
+        "different_key_count": len(differences),
+        "original_only_count": len(original_only),
+        "filtered_only_count": len(filtered_only),
+        "changed_value_count": len(changed),
+        "important_same_keys": important_same[:120],
+        "original_only_keys_sample": original_only[:120],
+        "filtered_only_keys_sample": filtered_only[:120],
+        "changed_keys_sample": changed[:120],
+    }
+
+
+def compare_metadata(
+    original: Path,
+    filtered: Path,
+    *,
+    use_exiftool: bool = False,
+    exiftool_path: str | None = None,
+    require_exiftool: bool = False,
+) -> dict[str, Any]:
+    left = inspect_image_metadata(
+        original,
+        use_exiftool=use_exiftool,
+        exiftool_path=exiftool_path,
+        require_exiftool=require_exiftool,
+    )
+    right = inspect_image_metadata(
+        filtered,
+        use_exiftool=use_exiftool,
+        exiftool_path=exiftool_path,
+        require_exiftool=require_exiftool,
+    )
     left_flat = _flatten(left)
     right_flat = _flatten(right)
     keys = sorted(set(left_flat) | set(right_flat))
     differences = []
     same = []
     for key in keys:
-        if key.startswith("file.mtime_epoch") or key == "path":
+        if _skip_compare_key(key):
             continue
         a = left_flat.get(key, "")
         b = right_flat.get(key, "")
@@ -269,6 +692,7 @@ def compare_metadata(original: Path, filtered: Path) -> dict[str, Any]:
             same.append(key)
         else:
             differences.append({"key": key, "original": a, "filtered": b})
+    summary = _comparison_summary(left_flat, right_flat, same, differences)
     return {
         "original": left,
         "filtered": right,
@@ -276,6 +700,7 @@ def compare_metadata(original: Path, filtered: Path) -> dict[str, Any]:
         "different_key_count": len(differences),
         "same_keys": same,
         "differences": differences,
+        "similarity_summary": summary,
     }
 
 
@@ -313,12 +738,38 @@ def write_diff_csv(comparisons: list[dict[str, Any]], output_csv: Path) -> None:
                 writer.writerow({"pair_index": idx, **diff})
 
 
-def inspect_export_dir(export_dir: Path) -> dict[str, Any]:
+def write_same_csv(comparisons: list[dict[str, Any]], output_csv: Path) -> None:
+    output_csv.parent.mkdir(parents=True, exist_ok=True)
+    with output_csv.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["pair_index", "key"])
+        writer.writeheader()
+        for idx, comparison in enumerate(comparisons, start=1):
+            for key in comparison.get("same_keys", []):
+                writer.writerow({"pair_index": idx, "key": key})
+
+
+def inspect_export_dir(
+    export_dir: Path,
+    *,
+    use_exiftool: bool = False,
+    exiftool_path: str | None = None,
+    require_exiftool: bool = False,
+) -> dict[str, Any]:
     pairs = _load_export_pairs(export_dir)
-    comparisons = [compare_metadata(original, filtered) for original, filtered in pairs]
+    comparisons = [
+        compare_metadata(
+            original,
+            filtered,
+            use_exiftool=use_exiftool,
+            exiftool_path=exiftool_path,
+            require_exiftool=require_exiftool,
+        )
+        for original, filtered in pairs
+    ]
     return {
         "export_dir": str(export_dir),
         "pair_count": len(comparisons),
+        "exiftool_enabled": bool(use_exiftool or require_exiftool),
         "pairs": [
             {"original": str(original), "filtered": str(filtered)}
             for original, filtered in pairs
@@ -331,9 +782,13 @@ def print_summary(report: dict[str, Any]) -> None:
     comparisons = report.get("comparisons") or [report]
     print("IMAGE METADATA REPORT")
     print(f"pairs: {len(comparisons)}")
+    print(f"exiftool_enabled: {bool(report.get('exiftool_enabled'))}")
     for idx, comparison in enumerate(comparisons, start=1):
         original = comparison["original"]
         filtered = comparison["filtered"]
+        summary = comparison.get("similarity_summary", {})
+        original_exiftool = original.get("exiftool", {})
+        filtered_exiftool = filtered.get("exiftool", {})
         print("")
         print(f"PAIR {idx}")
         print(f"original: {original['path']}")
@@ -346,9 +801,22 @@ def print_summary(report: dict[str, Any]) -> None:
         print(f"icc_present: {original['container']['icc_profile_present']} -> {filtered['container']['icc_profile_present']}")
         print(f"xmp_like_present: {bool(original['xmp_like_info'])} -> {bool(filtered['xmp_like_info'])}")
         print(f"gps_present: {original['risk_summary']['has_gps']} -> {filtered['risk_summary']['has_gps']}")
+        print(f"photoshop_metadata: {original['risk_summary']['has_photoshop_metadata']} -> {filtered['risk_summary']['has_photoshop_metadata']}")
+        print(f"c2pa_or_jumbf_hint: {original['risk_summary']['has_c2pa_or_jumbf_hint']} -> {filtered['risk_summary']['has_c2pa_or_jumbf_hint']}")
+        print(f"jpeg_app_segments: {original['jpeg']['low_level_segments']['app_segment_count']} -> {filtered['jpeg']['low_level_segments']['app_segment_count']}")
+        print(f"jpeg_com_segments: {original['jpeg']['low_level_segments']['com_segment_count']} -> {filtered['jpeg']['low_level_segments']['com_segment_count']}")
+        print(f"jpeg_quantization_sha256: {original['jpeg']['encoder_details'].get('quantization_sha256', '')} -> {filtered['jpeg']['encoder_details'].get('quantization_sha256', '')}")
+        if original_exiftool.get("enabled") or filtered_exiftool.get("enabled"):
+            print(f"exiftool_available: {original_exiftool.get('available')} -> {filtered_exiftool.get('available')}")
+            print(f"exiftool_tag_count: {original_exiftool.get('tag_count', 0)} -> {filtered_exiftool.get('tag_count', 0)}")
         print(f"sensitive_tags_original: {len(original['risk_summary']['sensitive_tag_paths'])}")
         print(f"sensitive_tags_filtered: {len(filtered['risk_summary']['sensitive_tag_paths'])}")
+        print(f"same_keys: {comparison['same_key_count']}")
         print(f"different_keys: {comparison['different_key_count']}")
+        if summary.get("important_same_keys"):
+            print("important_same_keys_sample:")
+            for key in summary["important_same_keys"][:12]:
+                print(f"  SAME: {key}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -359,31 +827,51 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--filtered", default=None, help="Image filtree si --original est utilise")
     parser.add_argument("--output-json", default=None, help="Chemin du rapport JSON")
     parser.add_argument("--output-csv", default=None, help="Chemin du CSV de differences")
+    parser.add_argument("--output-same-csv", default=None, help="Chemin du CSV des cles identiques")
+    parser.add_argument("--use-exiftool", action="store_true", help="Ajoute une passe ExifTool JSON complete si exiftool est installe.")
+    parser.add_argument("--require-exiftool", action="store_true", help="Echoue si ExifTool n'est pas disponible.")
+    parser.add_argument("--exiftool-path", default=None, help="Chemin explicite vers exiftool.exe si non present dans le PATH.")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    use_exiftool = bool(args.use_exiftool or args.require_exiftool)
     if args.original:
         if not args.filtered:
             raise SystemExit("--filtered est requis avec --original")
-        report = compare_metadata(Path(args.original), Path(args.filtered))
+        report = compare_metadata(
+            Path(args.original),
+            Path(args.filtered),
+            use_exiftool=use_exiftool,
+            exiftool_path=args.exiftool_path,
+            require_exiftool=args.require_exiftool,
+        )
+        report["exiftool_enabled"] = use_exiftool
         default_root = Path(args.filtered).parent
         comparisons = [report]
     else:
         export_dir = Path(str(args.export_dir))
-        report = inspect_export_dir(export_dir)
+        report = inspect_export_dir(
+            export_dir,
+            use_exiftool=use_exiftool,
+            exiftool_path=args.exiftool_path,
+            require_exiftool=args.require_exiftool,
+        )
         default_root = export_dir
         comparisons = report.get("comparisons", [])
 
     output_json = Path(args.output_json) if args.output_json else default_root / "metadata_compare_report.json"
     output_csv = Path(args.output_csv) if args.output_csv else default_root / "metadata_compare_diff.csv"
+    output_same_csv = Path(args.output_same_csv) if args.output_same_csv else default_root / "metadata_compare_same.csv"
     write_report(report, output_json)
     write_diff_csv(list(comparisons), output_csv)
+    write_same_csv(list(comparisons), output_same_csv)
     print_summary(report)
     print("")
     print(f"json: {output_json}")
-    print(f"csv: {output_csv}")
+    print(f"csv_diff: {output_csv}")
+    print(f"csv_same: {output_same_csv}")
     return 0
 
 
