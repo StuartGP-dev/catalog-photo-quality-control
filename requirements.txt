@@ -1,6 +1,8 @@
 numpy>=1.26
 Pillow>=10.0
 ImageHash>=4.3
+scikit-image>=0.24
+defusedxml>=0.7
 psycopg[binary]>=3.2
 python-dotenv>=1.0
 piexif>=1.1.3
