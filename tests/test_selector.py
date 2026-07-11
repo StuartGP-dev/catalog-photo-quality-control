@@ -71,5 +71,9 @@ def test_complete_selection_resumes_and_stops_at_target(
     ).fetchall()
     assert all(row[1] == len(listing.images) for row in rows)
     assert any(row[2] != "{}" for row in rows[1:])
+    selected_stats = bench.connection.execute(
+        "SELECT SUM(selected_count) FROM recipe_global_stats"
+    ).fetchone()[0]
+    assert selected_stats == 3
     bench.close()
     variants.close()

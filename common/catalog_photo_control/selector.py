@@ -11,6 +11,7 @@ from typing import Mapping, Sequence
 
 from .diversity import Distance, listing_distance
 from .models import ListingVariant, Recipe, SourceListing
+from .recipe_learning import refresh_recipe_statistics
 from .variants_db import VariantsDatabase
 
 
@@ -174,6 +175,7 @@ def select_and_persist(
         if destination.exists():
             raise FileExistsError(destination)
         temporary = Path(tempfile.mkdtemp(prefix=f".{destination.name}-", dir=root))
+        variant_committed = False
         try:
             copied_paths: list[Path] = []
             for image in selection.candidate.images:
@@ -208,14 +210,22 @@ def select_and_persist(
                 )
             ]
             variant_id = variants.save_complete_variant(variant, image_rows)
+            variant_committed = True
             with bench_connection:
                 bench_connection.execute(
                     "UPDATE recipe_tests SET selected=1 WHERE test_id=?",
                     (selection.candidate.test_id,),
                 )
+            recipe_id_row = bench_connection.execute(
+                "SELECT recipe_id FROM recipe_tests WHERE test_id=?",
+                (selection.candidate.test_id,),
+            ).fetchone()
+            assert recipe_id_row is not None
+            refresh_recipe_statistics(bench_connection, int(recipe_id_row[0]))
             variant_ids.append(variant_id)
         except BaseException:
             shutil.rmtree(temporary, ignore_errors=True)
-            shutil.rmtree(destination, ignore_errors=True)
+            if not variant_committed:
+                shutil.rmtree(destination, ignore_errors=True)
             raise
     return variant_ids
