@@ -200,6 +200,42 @@ class BenchDatabase:
                 ],
             )
 
+    def start_run(
+        self,
+        run_id: str,
+        listing: SourceListing,
+        target_variants: int,
+        started_at: str,
+    ) -> None:
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO bench_runs
+                   (run_id, listing_id, source_set_hash, target_variants, status, started_at)
+                   VALUES (?, ?, ?, ?, 'running', ?)""",
+                (
+                    run_id,
+                    listing.listing_id,
+                    listing.source_set_hash,
+                    target_variants,
+                    started_at,
+                ),
+            )
+
+    def finish_run(
+        self,
+        run_id: str,
+        status: str,
+        stop_reason: str,
+        finished_at: str,
+        counters: Mapping[str, int],
+    ) -> None:
+        with self.connection:
+            self.connection.execute(
+                """UPDATE bench_runs SET status=?, stop_reason=?, finished_at=?,
+                   counters_json=? WHERE run_id=?""",
+                (status, stop_reason, finished_at, canonical_json(counters), run_id),
+            )
+
     def recipe_id(self, recipe: Recipe) -> int:
         with self.transaction() as connection:
             connection.execute(
