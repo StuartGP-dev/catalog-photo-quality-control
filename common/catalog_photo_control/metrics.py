@@ -40,7 +40,10 @@ def image_metrics(source_path: Path, output_path: Path) -> dict[str, float]:
     distance_luma = _luminance(output_for_distance)
     source_sharpness = _sharpness(source_luma)
     output_sharpness = _sharpness(output_luma)
-    sharpness_ratio = output_sharpness / max(source_sharpness, 1e-9)
+    sharpness_ratio = (
+        1.0 if source_sharpness < 1e-9 and output_sharpness < 1e-9
+        else output_sharpness / max(source_sharpness, 1e-9)
+    )
     clip_fraction = float(np.mean((output_luma <= 0.01) | (output_luma >= 0.99)))
     channel_spread = np.max(output, axis=2) - np.min(output, axis=2)
     return {

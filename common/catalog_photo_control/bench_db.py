@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS recipe_tests (
     aggregate_metrics_json TEXT NOT NULL,
     error_text TEXT,
     retained_output_dir TEXT,
+    context_key TEXT NOT NULL DEFAULT 'unknown',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (listing_id, source_set_hash, recipe_id)
 );
@@ -227,14 +228,16 @@ class BenchDatabase:
         image_rows: Sequence[Mapping[str, Any]],
         *,
         retained_output_dir: str | None = None,
+        context_key: str = "unknown",
     ) -> int:
         recipe_id = self.recipe_id(test.recipe)
         with self.transaction() as connection:
             cursor = connection.execute(
                 """INSERT INTO recipe_tests
                    (listing_id, source_set_hash, recipe_id, complete, quality_valid,
-                    eligible, aggregate_metrics_json, error_text, retained_output_dir)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    eligible, aggregate_metrics_json, error_text, retained_output_dir,
+                    context_key)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     test.listing_id,
                     test.source_set_hash,
@@ -245,6 +248,7 @@ class BenchDatabase:
                     canonical_json(test.aggregate_metrics),
                     test.error,
                     retained_output_dir,
+                    context_key,
                 ),
             )
             test_id = int(cursor.lastrowid)
@@ -290,6 +294,7 @@ class BenchDatabase:
         from .image_pipeline import render_listing
         from .metrics import aggregate_metrics, image_metrics
         from .quality import evaluate_quality
+        from .recipe_learning import listing_context_key, refresh_recipe_statistics
 
         cached = self.cached_test(
             listing.listing_id, listing.source_set_hash, recipe.recipe_hash
@@ -314,6 +319,7 @@ class BenchDatabase:
                 )
 
         output_dir = Path(work_root).resolve() / recipe.recipe_hash
+        context_key = listing_context_key(listing)
         if output_dir.exists():
             shutil.rmtree(output_dir)
         try:
@@ -353,7 +359,9 @@ class BenchDatabase:
                 test,
                 rows,
                 retained_output_dir=str(output_dir) if quality.valid else None,
+                context_key=context_key,
             )
+            refresh_recipe_statistics(self.connection, self.recipe_id(recipe))
             if not quality.valid:
                 shutil.rmtree(output_dir, ignore_errors=True)
                 output_dir_result = None
@@ -382,7 +390,8 @@ class BenchDatabase:
                 {},
                 error=f"{type(error).__name__}: {error}",
             )
-            test_id = self.record_test(test, [])
+            test_id = self.record_test(test, [], context_key=context_key)
+            refresh_recipe_statistics(self.connection, self.recipe_id(recipe))
             return TestExecution(
                 test_id, False, False, False, False, {}, None, test.error
             )
