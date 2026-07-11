@@ -101,6 +101,10 @@ class ListingVariant:
     recipe: Recipe
     image_paths: tuple[Path, ...]
     selected_rank: int
+    bench_test_id: int | None = None
+    aggregate_metrics: Mapping[str, float] = field(default_factory=dict)
+    distance_from_original: float = 0.0
+    minimum_selected_distance: float | None = None
     title_text: str | None = None
     description_text: str | None = None
     price_cents: int | None = None
