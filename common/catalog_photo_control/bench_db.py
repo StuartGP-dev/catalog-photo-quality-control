@@ -2,13 +2,27 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sqlite3
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
 from .models import Recipe, RecipeTest, SourceListing, canonical_json
 from .paths import LocalPaths
+
+
+@dataclass(frozen=True, slots=True)
+class TestExecution:
+    test_id: int
+    cached: bool
+    complete: bool
+    quality_valid: bool
+    eligible: bool
+    aggregate_metrics: Mapping[str, float]
+    output_dir: Path | None
+    error: str | None = None
 
 
 SCHEMA = """
@@ -262,6 +276,115 @@ class BenchDatabase:
             self.connection.execute(
                 "INSERT OR IGNORE INTO run_tests VALUES (?, ?, ?, ?)",
                 (run_id, test_id, proposal_source, int(cached)),
+            )
+
+    def execute_recipe_test(
+        self,
+        listing: SourceListing,
+        recipe: Recipe,
+        work_root: str | Path,
+        quality_thresholds: Mapping[str, float],
+        *,
+        force: bool = False,
+    ) -> TestExecution:
+        from .image_pipeline import render_listing
+        from .metrics import aggregate_metrics, image_metrics
+        from .quality import evaluate_quality
+
+        cached = self.cached_test(
+            listing.listing_id, listing.source_set_hash, recipe.recipe_hash
+        )
+        if cached is not None and not force:
+            return TestExecution(
+                int(cached["test_id"]),
+                True,
+                bool(cached["complete"]),
+                bool(cached["quality_valid"]),
+                bool(cached["eligible"]),
+                json.loads(cached["aggregate_metrics_json"]),
+                Path(cached["retained_output_dir"])
+                if cached["retained_output_dir"]
+                else None,
+                cached["error_text"],
+            )
+        if cached is not None:
+            with self.connection:
+                self.connection.execute(
+                    "DELETE FROM recipe_tests WHERE test_id=?", (cached["test_id"],)
+                )
+
+        output_dir = Path(work_root).resolve() / recipe.recipe_hash
+        if output_dir.exists():
+            shutil.rmtree(output_dir)
+        try:
+            rendered = render_listing(listing, recipe, output_dir)
+            if len(rendered.images) != len(listing.images):
+                raise RuntimeError("render did not cover every source image")
+            metric_rows = [
+                image_metrics(source.path, output.output_path)
+                for source, output in zip(listing.images, rendered.images, strict=True)
+            ]
+            aggregate = aggregate_metrics(metric_rows)
+            quality = evaluate_quality(metric_rows, quality_thresholds)
+            aggregate["quality_score"] = quality.score
+            rows = [
+                {
+                    "image_index": output.image_index,
+                    "source_hash": output.source_hash,
+                    "success": True,
+                    "output_path": str(output.output_path) if quality.valid else None,
+                    "output_hash": output.output_hash,
+                    "metrics": metrics,
+                }
+                for output, metrics in zip(rendered.images, metric_rows, strict=True)
+            ]
+            test = RecipeTest(
+                None,
+                listing.listing_id,
+                listing.source_set_hash,
+                recipe,
+                True,
+                quality.valid,
+                quality.valid,
+                aggregate,
+                error=",".join(quality.reasons) or None,
+            )
+            test_id = self.record_test(
+                test,
+                rows,
+                retained_output_dir=str(output_dir) if quality.valid else None,
+            )
+            if not quality.valid:
+                shutil.rmtree(output_dir, ignore_errors=True)
+                output_dir_result = None
+            else:
+                output_dir_result = output_dir
+            return TestExecution(
+                test_id,
+                False,
+                True,
+                quality.valid,
+                quality.valid,
+                aggregate,
+                output_dir_result,
+                test.error,
+            )
+        except Exception as error:
+            shutil.rmtree(output_dir, ignore_errors=True)
+            test = RecipeTest(
+                None,
+                listing.listing_id,
+                listing.source_set_hash,
+                recipe,
+                False,
+                False,
+                False,
+                {},
+                error=f"{type(error).__name__}: {error}",
+            )
+            test_id = self.record_test(test, [])
+            return TestExecution(
+                test_id, False, False, False, False, {}, None, test.error
             )
 
 
