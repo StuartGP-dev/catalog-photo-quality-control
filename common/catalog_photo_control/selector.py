@@ -149,7 +149,7 @@ def select_and_persist(
     selected_root: str | Path,
 ) -> list[int]:
     existing_rows = variants.connection.execute(
-        """SELECT recipe_hash, aggregate_metrics_json FROM listing_variants
+        """SELECT recipe_hash, bench_test_id, aggregate_metrics_json FROM listing_variants
            WHERE listing_id=? AND source_set_hash=? AND status='ready'
            ORDER BY selected_rank""",
         (listing.listing_id, listing.source_set_hash),
@@ -159,6 +159,11 @@ def select_and_persist(
         return []
     existing_hashes = {row["recipe_hash"] for row in existing_rows}
     existing_metrics = [json.loads(row["aggregate_metrics_json"]) for row in existing_rows]
+    selected_references = [
+        (int(row["bench_test_id"]), json.loads(row["aggregate_metrics_json"]))
+        for row in existing_rows
+        if row["bench_test_id"] is not None
+    ]
     candidates = [
         candidate
         for candidate in load_eligible_candidates(bench_connection, listing)
@@ -222,6 +227,39 @@ def select_and_persist(
             ).fetchone()
             assert recipe_id_row is not None
             refresh_recipe_statistics(bench_connection, int(recipe_id_row[0]))
+            with bench_connection:
+                for other_test_id, other_metrics in selected_references:
+                    distance = listing_distance(
+                        selection.candidate.aggregate_metrics, other_metrics
+                    )
+                    test_a, test_b = sorted(
+                        (selection.candidate.test_id, other_test_id)
+                    )
+                    if test_a != test_b:
+                        bench_connection.execute(
+                            """INSERT OR IGNORE INTO recipe_pair_distances
+                               (listing_id, source_set_hash, test_a, test_b,
+                                components_json, distance)
+                               VALUES (?, ?, ?, ?, ?, ?)""",
+                            (
+                                listing.listing_id,
+                                listing.source_set_hash,
+                                test_a,
+                                test_b,
+                                json.dumps(
+                                    distance.components,
+                                    sort_keys=True,
+                                    separators=(",", ":"),
+                                ),
+                                distance.total,
+                            ),
+                        )
+            selected_references.append(
+                (
+                    selection.candidate.test_id,
+                    selection.candidate.aggregate_metrics,
+                )
+            )
             variant_ids.append(variant_id)
         except BaseException:
             shutil.rmtree(temporary, ignore_errors=True)

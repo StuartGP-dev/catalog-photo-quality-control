@@ -75,5 +75,8 @@ def test_complete_selection_resumes_and_stops_at_target(
         "SELECT SUM(selected_count) FROM recipe_global_stats"
     ).fetchone()[0]
     assert selected_stats == 3
+    assert bench.connection.execute(
+        "SELECT COUNT(*) FROM recipe_pair_distances"
+    ).fetchone()[0] == 3
     bench.close()
     variants.close()
