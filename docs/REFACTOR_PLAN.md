@@ -12,8 +12,6 @@ Refactor the project around one reproducible offline catalog-augmentation and qu
 - reusable cross-listing recipe statistics;
 - resumable execution until a requested number of accepted variants exists.
 
-The refactor is scoped to legitimate offline dataset augmentation, catalog quality control, and reproducible experimentation. Platform-specific evasion, sanction bypass, or account-linking bypass is out of scope.
-
 ## Non-negotiable invariants
 
 1. A variant is valid only when all active source images were processed successfully.
