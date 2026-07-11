@@ -50,6 +50,11 @@ exploration, 30 % recettes éprouvées, 20 % mutations par défaut). Elle peut �
 surchargée avec les trois options `--random-share`, `--proven-share` et
 `--mutation-share`, dont la somme doit être 1.
 
+La sélection attend par défaut un pool de trois candidats éligibles par place
+restante avant d’appliquer le max-min. Ce multiplicateur est configurable via
+`selection_pool_multiplier` dans le même fichier. Si une limite d’arrêt survient
+avant, le pool valide disponible est tout de même sélectionné.
+
 ## Sorties
 
 ```text

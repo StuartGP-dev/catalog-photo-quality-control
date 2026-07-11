@@ -14,7 +14,7 @@ from .html_report import write_html_report
 from .paths import LocalPaths
 from .recipe_generator import RecipeGenerator
 from .recipe_learning import listing_context_key, proven_recipes
-from .selector import select_and_persist
+from .selector import load_eligible_candidates, select_and_persist
 from .source_loader import load_source_listing
 from .variants_db import VariantsDatabase
 
@@ -124,7 +124,7 @@ def run_benchmark(args: argparse.Namespace) -> tuple[str, Path, dict[str, int]]:
         try:
             while True:
                 selected_count = variants.ready_count(listing.listing_id, listing.source_set_hash)
-                stop_reason = classify_stop_reason(
+                pending_stop = classify_stop_reason(
                     selected=selected_count,
                     target=args.target_variants,
                     tests=counters["tested"],
@@ -133,8 +133,25 @@ def run_benchmark(args: argparse.Namespace) -> tuple[str, Path, dict[str, int]]:
                     max_duration_seconds=args.max_duration_minutes * 60,
                     stale=stale,
                     patience=args.patience,
-                ) or ""
-                if stop_reason:
+                )
+                if pending_stop:
+                    if pending_stop != "target_reached":
+                        new_ids = select_and_persist(
+                            bench.connection,
+                            variants,
+                            listing,
+                            args.target_variants,
+                            selected_root,
+                        )
+                        counters["selected"] += len(new_ids)
+                        selected_count = variants.ready_count(
+                            listing.listing_id, listing.source_set_hash
+                        )
+                    stop_reason = (
+                        "target_reached"
+                        if selected_count >= args.target_variants
+                        else pending_stop
+                    )
                     break
                 context = listing_context_key(listing)
                 proven = proven_recipes(bench.connection, context)
@@ -153,17 +170,19 @@ def run_benchmark(args: argparse.Namespace) -> tuple[str, Path, dict[str, int]]:
                 bench.add_run_test(
                     run_id, execution.test_id, proposal.source, cached=execution.cached
                 )
-                before = selected_count
-                new_ids = select_and_persist(
-                    bench.connection,
-                    variants,
-                    listing,
-                    args.target_variants,
-                    selected_root,
-                )
-                counters["selected"] += len(new_ids)
+                stale = 0 if execution.eligible and not execution.cached else stale + 1
+                candidates = load_eligible_candidates(bench.connection, listing)
+                needed = args.target_variants - selected_count
+                if needed > 0 and len(candidates) >= needed * space.selection_pool_multiplier:
+                    new_ids = select_and_persist(
+                        bench.connection,
+                        variants,
+                        listing,
+                        args.target_variants,
+                        selected_root,
+                    )
+                    counters["selected"] += len(new_ids)
                 after = variants.ready_count(listing.listing_id, listing.source_set_hash)
-                stale = 0 if after > before else stale + 1
                 if not args.quiet:
                     print(
                         f"tests={counters['tested']} cached={counters['cached']} "

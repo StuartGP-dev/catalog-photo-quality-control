@@ -27,6 +27,7 @@ def test_filter_space_loads_and_fills_canonical_defaults() -> None:
 
     assert first.recipe_hash == second.recipe_hash
     assert set(first.parameters) == set(space.schema.parameters)
+    assert space.selection_pool_multiplier >= 1
 
 
 def test_invalid_range_fails_early() -> None:

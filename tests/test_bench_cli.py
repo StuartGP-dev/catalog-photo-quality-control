@@ -44,6 +44,7 @@ def test_cli_generates_exactly_one_html_with_all_selected_images(
 
     assert stop_reason == "target_reached"
     assert counters["obtained"] == 2
+    assert counters["tested"] >= 6
     assert list((tmp_path / "local").rglob("*.html")) == [report]
     content = report.read_text(encoding="utf-8")
     assert content.count("<article class=\"variant\">") == 2

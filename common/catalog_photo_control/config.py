@@ -16,6 +16,7 @@ class FilterSpace:
     schema: RecipeSchema
     proposal_allocation: Mapping[str, float]
     quality_thresholds: Mapping[str, float]
+    selection_pool_multiplier: int
     raw: Mapping[str, Any]
 
 
@@ -39,9 +40,13 @@ def load_filter_space(path: str | Path = DEFAULT_FILTER_SPACE) -> FilterSpace:
     thresholds = raw.get("quality_thresholds", {})
     if not isinstance(thresholds, Mapping):
         raise ValueError("quality_thresholds must be an object")
+    pool_multiplier = raw.get("selection_pool_multiplier", 3)
+    if not isinstance(pool_multiplier, int) or pool_multiplier < 1:
+        raise ValueError("selection_pool_multiplier must be a positive integer")
     return FilterSpace(
         schema,
         {str(key): float(value) for key, value in allocation.items()},
         {str(key): float(value) for key, value in thresholds.items()},
+        pool_multiplier,
         raw,
     )
