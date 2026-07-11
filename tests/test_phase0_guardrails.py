@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import subprocess
+import importlib
+import pkgutil
 from pathlib import Path
 
 from PIL import Image
@@ -13,6 +15,18 @@ def test_package_imports() -> None:
     import common.catalog_photo_control as package
 
     assert package.__name__ == "common.catalog_photo_control"
+
+
+def test_every_package_module_imports() -> None:
+    import common.catalog_photo_control as package
+
+    names = [
+        module.name
+        for module in pkgutil.walk_packages(package.__path__, package.__name__ + ".")
+    ]
+    assert names
+    for name in names:
+        importlib.import_module(name)
 
 
 def test_synthetic_listing_contains_only_generated_images(
