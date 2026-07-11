@@ -1,120 +1,97 @@
-# Catalog photo quality control
+# Catalog Photo Control
 
-Ce paquet utilise un nommage neutre et oriente controle qualite des photos catalogue.
+Pipeline locale et reproductible de génération, benchmark qualité et sélection
+de variants photo complets pour une annonce. Une recette canonique unique est
+appliquée à toutes les images d’un variant ; un échec d’image invalide le variant
+entier.
 
-## Objectif actuel
+## Installation
 
-Construire une pipeline de filtres par annonce :
-
-1. scanner les annonces locales ;
-2. tester beaucoup de recettes de rendu ;
-3. stocker les resultats dans une DB partagee ;
-4. clusteriser les filtres par annonce ;
-5. selectionner progressivement des filtres differents entre eux ;
-6. exporter une annonce complete avec le meme filtre applique a toutes ses images.
-
-Une annonce contient plusieurs images. Une recette de filtre doit donc etre evaluee sur toute l'annonce, avec des stats par image puis une agregation annonce : moyenne, minimum, maximum et stabilite.
-
-## Modules principaux
-
-- `common.catalog_photo_control.client_render_sampler`
-- `common.catalog_photo_control.filter_cluster_builder`
-- `common.catalog_photo_control.diverse_target_selector`
-- `common.catalog_photo_control.catalog_config`
-- `common.catalog_photo_control.catalog_db`
-- `common.catalog_photo_control.init_catalog_db`
-- `common.catalog_photo_control.ingest_annonces`
-
-## Chemins locaux par defaut
-
-Par defaut, le code lit les annonces depuis :
-
-```text
-C:\Users\yanis\Documents\Code\Bot\annonces
-```
-
-Les sorties generees restent dans :
-
-```text
-<repo>\local\debug_catalog_photo_control
-<repo>\local\catalog_filter_engine
-```
-
-Le dossier `local/` est ignore par Git pour eviter de publier les sorties de benchmark, les DB SQLite locales et les images generees.
-
-## Environnement Python
-
-Creation du venv Windows :
+Sous PowerShell :
 
 ```powershell
-cd C:\Users\yanis\Documents\Code\Catalog-Photo-Control
 powershell -ExecutionPolicy Bypass -File .\scripts\setup_venv.ps1
 .\.venv\Scripts\Activate.ps1
+python -m pytest -q
 ```
 
-## DB partagee multi-PC
+Les sources d’annonces restent externes et sont uniquement lues. Toutes les
+sorties sont placées sous `local/`, ignoré par Git.
 
-La DB principale doit etre PostgreSQL, pas SQLite.
+## Benchmark unique
 
-Demarrage local via Docker sur le PC qui heberge la DB :
+Avec un chemin d’annonce direct :
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start_shared_db.ps1 -Password "CHANGE_ME_STRONG"
-$env:CATALOG_DB_DSN = "postgresql://catalog_user:CHANGE_ME_STRONG@localhost:5432/catalog_filter_engine"
-python -m common.catalog_photo_control.init_catalog_db --require-postgres
+python -m common.catalog_photo_control.bench `
+  --listing "C:\catalogue\bijoux\O\O18" `
+  --target-variants 50 `
+  --max-tests 20000 `
+  --max-duration-minutes 180 `
+  --patience 3000
 ```
 
-Depuis un autre PC via Tailscale, remplacer `localhost` par l'IP Tailscale du PC qui heberge Postgres :
+Avec une racine externe et un code relatif :
 
 ```powershell
-$env:CATALOG_DB_DSN = "postgresql://catalog_user:CHANGE_ME_STRONG@100.x.x.x:5432/catalog_filter_engine"
-python -m common.catalog_photo_control.init_catalog_db --require-postgres
+python -m common.catalog_photo_control.bench `
+  --source-root "C:\catalogue" `
+  --listing "bijoux/O/O18" `
+  --target-variants 50
 ```
 
-Fallback local SQLite seulement pour smoke tests isoles :
+Chaque invocation crée un run distinct, mais réutilise automatiquement les tests
+déjà présents pour la même empreinte ordonnée des sources. Les variants finaux
+existants comptent dans `--target-variants`. Les limites positives
+`--max-tests`, `--max-duration-minutes` et `--patience` garantissent l’arrêt.
+
+La répartition des propositions vient de `config/filter_space.json` (50 %
+exploration, 30 % recettes éprouvées, 20 % mutations par défaut). Elle peut être
+surchargée avec les trois options `--random-share`, `--proven-share` et
+`--mutation-share`, dont la somme doit être 1.
+
+## Sorties
+
+```text
+local/
+├── databases/
+│   ├── catalog_bench.sqlite3
+│   └── catalog_variants.sqlite3
+├── bench_work/
+└── bench_runs/<listing>/<run_id>/
+    ├── index.html
+    └── selected_variants/variant_0001/...
+```
+
+Un run produit exactement un fichier HTML : `index.html`. Il affiche le motif
+d’arrêt, les compteurs, toutes les images de chaque variant dans l’ordre source,
+la recette, les métriques et les champs réservés de contenu/métadonnées.
+
+Les deux bases vides peuvent aussi être initialisées sans lancer de benchmark :
 
 ```powershell
-$env:CATALOG_DB_DSN = "sqlite:///local/catalog_filter_engine/catalog_filters.sqlite3"
+python -m common.catalog_photo_control.bench_db --local-root local
 ```
 
-Les autres variables utiles :
+Le détail des tables et invariants se trouve dans
+[`docs/SCHEMA.md`](docs/SCHEMA.md). Le seul espace de filtres est
+[`config/filter_space.json`](config/filter_space.json) ; il n’existe aucun profil
+fixe.
+
+## Confidentialité des métadonnées
+
+Le refactor ne contient pas de pipeline de métadonnées. L’utilitaire autonome
+conservé crée des copies sans métadonnées de deux images sans modifier les
+sources :
 
 ```powershell
-$env:CATALOG_PHOTO_ANNONCES_ROOT = "C:\Users\yanis\Documents\Code\Bot\annonces"
-$env:CATALOG_PHOTO_OUTPUT_ROOT = "local\catalog_filter_engine"
+python .\metadata_privacy_two_images.py image1.jpg image2.jpg `
+  --output-dir local\metadata_copies
 ```
 
-## Ingestion annonces
-
-Dry-run sans ecriture DB :
-
-```powershell
-python -m common.catalog_photo_control.ingest_annonces --dry-run --limit 5
-```
-
-Ecriture DB partagee :
-
-```powershell
-$env:CATALOG_DB_DSN = "postgresql://catalog_user:CHANGE_ME_STRONG@localhost:5432/catalog_filter_engine"
-python -m common.catalog_photo_control.ingest_annonces --limit 5
-```
-
-Run complet :
-
-```powershell
-python -m common.catalog_photo_control.ingest_annonces
-```
-
-## Nettoyage local
-
-Voir ce qui serait supprime :
+## Nettoyage
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\clean_generated_artifacts.ps1 -WhatIfOnly
-```
-
-Supprimer les artifacts locaux ignores par Git :
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\clean_generated_artifacts.ps1 -IncludeArchives
+powershell -ExecutionPolicy Bypass -File .\scripts\clean_generated_artifacts.ps1
 ```

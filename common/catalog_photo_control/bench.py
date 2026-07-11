@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import json
 import shutil
 import sys
 import time
 import uuid
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,18 +17,6 @@ from .recipe_learning import listing_context_key, proven_recipes
 from .selector import select_and_persist
 from .source_loader import load_source_listing
 from .variants_db import VariantsDatabase
-
-
-STOP_REASONS = frozenset(
-    {
-        "target_reached",
-        "max_tests_reached",
-        "max_duration_reached",
-        "patience_exhausted",
-        "interrupted",
-        "error",
-    }
-)
 
 
 def classify_stop_reason(
