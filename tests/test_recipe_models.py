@@ -43,8 +43,14 @@ def test_unknown_and_incompatible_settings_fail_early() -> None:
 
     with pytest.raises(ValueError, match="unknown recipe"):
         schema.canonicalize({"fixed_profile": "vivid"})
+    raw = json.loads(DEFAULT_FILTER_SPACE.read_text(encoding="utf-8"))
+    raw["parameters"]["grayscale_blend"].update(enabled=True, activation_probability=0.1)
+    raw["parameters"]["sepia_blend"].update(enabled=True, activation_probability=0.1)
+    enabled_style_schema = RecipeSchema.from_mapping(raw)
     with pytest.raises(ValueError, match="cannot be active together"):
-        schema.canonicalize({"grayscale_blend": 0.5, "sepia_blend": 0.2})
+        enabled_style_schema.canonicalize(
+            {"grayscale_blend": 0.5, "sepia_blend": 0.2}
+        )
     with pytest.raises(ValueError, match="disabled"):
         schema.canonicalize({"rounded_radius": 10, "canvas_padding": 0.1})
 
