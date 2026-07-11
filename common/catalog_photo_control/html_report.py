@@ -54,6 +54,13 @@ def write_html_report(
         metrics = html.escape(
             json.dumps(json.loads(variant["aggregate_metrics_json"]), indent=2, ensure_ascii=False)
         )
+        distance_components = html.escape(
+            json.dumps(
+                json.loads(variant["minimum_distance_components_json"]),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
         folder = html.escape(_relative_link(Path(images[0]["output_path"]).parent, output.parent)) if images else "#"
         cards.append(
             f"""<article class="variant">
@@ -65,6 +72,7 @@ def write_html_report(
             <div class="images">{image_html}</div>
             <details><summary>Canonical recipe</summary><pre>{recipe}</pre></details>
             <details><summary>Quality metrics</summary><pre>{metrics}</pre></details>
+            <details><summary>Minimum-distance components</summary><pre>{distance_components}</pre></details>
             <dl><dt>Title</dt><dd>{html.escape(variant['title_text'] or 'Reserved')}</dd>
             <dt>Description</dt><dd>{html.escape(variant['description_text'] or 'Reserved')}</dd>
             <dt>Price</dt><dd>{variant['price_cents'] if variant['price_cents'] is not None else 'Reserved'} {html.escape(variant['currency'] or '')}</dd>

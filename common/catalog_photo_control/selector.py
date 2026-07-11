@@ -193,6 +193,7 @@ def select_and_persist(
                 aggregate_metrics=selection.candidate.aggregate_metrics,
                 distance_from_original=selection.candidate.distance_from_original,
                 minimum_selected_distance=selection.minimum_distance,
+                minimum_distance_components=selection.distance_components,
             )
             image_rows = [
                 {

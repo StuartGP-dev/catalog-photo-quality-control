@@ -27,7 +27,8 @@ variants.
 
 - `listings`, `listing_images`: active and historical ordered sources;
 - `listing_variants`: recipe, selection rank, aggregate metrics, original and
-  minimum-selected distances, and reserved content fields;
+  minimum-selected distances with separately inspectable components, and
+  reserved content fields;
 - `listing_variant_images`: every output in source order with source/output
   hashes and per-image metrics.
 

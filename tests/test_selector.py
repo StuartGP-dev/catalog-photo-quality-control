@@ -66,8 +66,10 @@ def test_complete_selection_resumes_and_stops_at_target(
     assert len(third_ids) == 1
     assert variants.ready_count(listing.listing_id, listing.source_set_hash) == 3
     rows = variants.connection.execute(
-        "SELECT variant_id, expected_image_count FROM listing_variants WHERE status='ready'"
+        """SELECT variant_id, expected_image_count, minimum_distance_components_json
+           FROM listing_variants WHERE status='ready' ORDER BY selected_rank"""
     ).fetchall()
     assert all(row[1] == len(listing.images) for row in rows)
+    assert any(row[2] != "{}" for row in rows[1:])
     bench.close()
     variants.close()

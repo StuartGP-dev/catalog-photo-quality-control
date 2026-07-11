@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS listing_variants (
     quality_score REAL NOT NULL DEFAULT 0,
     distance_from_original REAL NOT NULL DEFAULT 0,
     minimum_selected_distance REAL,
+    minimum_distance_components_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(listing_id, source_set_hash, recipe_hash),
     UNIQUE(listing_id, source_set_hash, selected_rank)
@@ -176,8 +177,9 @@ class VariantsDatabase:
                     bench_test_id, selected_rank, expected_image_count, title_text,
                     description_text, price_cents, currency, metadata_json,
                     metadata_status, aggregate_metrics_json, quality_score,
-                    distance_from_original, minimum_selected_distance)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    distance_from_original, minimum_selected_distance,
+                    minimum_distance_components_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     variant.listing_id,
                     variant.source_set_hash,
@@ -196,6 +198,7 @@ class VariantsDatabase:
                     float(variant.aggregate_metrics.get("quality_score", 0)),
                     variant.distance_from_original,
                     variant.minimum_selected_distance,
+                    canonical_json(variant.minimum_distance_components),
                 ),
             )
             variant_id = int(cursor.lastrowid)
