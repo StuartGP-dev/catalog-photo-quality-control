@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "proposal_allocation": {
+    "random": 0.5,
+    "proven": 0.3,
+    "mutation": 0.2
+  },
+  "quality_thresholds": {
+    "minimum_quality": 0.35,
+    "maximum_clip_fraction": 0.2,
+    "minimum_sharpness_ratio": 0.35
+  },
+  "parameters": {
+    "brightness": {"type": "float", "enabled": true, "default": 1.0, "min": 0.75, "max": 1.3, "activation_probability": 0.65, "distribution": "triangular"},
+    "contrast": {"type": "float", "enabled": true, "default": 1.0, "min": 0.75, "max": 1.35, "activation_probability": 0.65, "distribution": "triangular"},
+    "saturation": {"type": "float", "enabled": true, "default": 1.0, "min": 0.65, "max": 1.4, "activation_probability": 0.55, "distribution": "triangular"},
+    "sharpness": {"type": "float", "enabled": true, "default": 1.0, "min": 0.5, "max": 2.0, "activation_probability": 0.45, "distribution": "triangular"},
+    "gamma": {"type": "float", "enabled": true, "default": 1.0, "min": 0.75, "max": 1.35, "activation_probability": 0.35, "distribution": "triangular"},
+    "warmth": {"type": "float", "enabled": true, "default": 0.0, "min": -0.25, "max": 0.25, "activation_probability": 0.35, "distribution": "triangular"},
+    "tint": {"type": "float", "enabled": true, "default": 0.0, "min": -0.2, "max": 0.2, "activation_probability": 0.3, "distribution": "triangular"},
+    "autocontrast_blend": {"type": "float", "enabled": true, "default": 0.0, "min": 0.0, "max": 1.0, "activation_probability": 0.2, "distribution": "uniform"},
+    "equalize_blend": {"type": "float", "enabled": true, "default": 0.0, "min": 0.0, "max": 0.6, "activation_probability": 0.12, "distribution": "uniform"},
+    "rotation_degrees": {"type": "float", "enabled": true, "default": 0.0, "min": -4.0, "max": 4.0, "activation_probability": 0.25, "distribution": "triangular"},
+    "crop_fraction": {"type": "float", "enabled": true, "default": 0.0, "min": 0.0, "max": 0.12, "activation_probability": 0.2, "distribution": "uniform"},
+    "zoom": {"type": "float", "enabled": true, "default": 1.0, "min": 0.9, "max": 1.15, "activation_probability": 0.25, "distribution": "triangular"},
+    "offset_x": {"type": "float", "enabled": true, "default": 0.0, "min": -0.08, "max": 0.08, "activation_probability": 0.15, "distribution": "triangular"},
+    "offset_y": {"type": "float", "enabled": true, "default": 0.0, "min": -0.08, "max": 0.08, "activation_probability": 0.15, "distribution": "triangular"},
+    "resize_scale": {"type": "float", "enabled": true, "default": 1.0, "min": 0.75, "max": 1.0, "activation_probability": 0.2, "distribution": "triangular"},
+    "gaussian_blur_radius": {"type": "float", "enabled": true, "default": 0.0, "min": 0.0, "max": 2.0, "activation_probability": 0.1, "distribution": "uniform"},
+    "median_size": {"type": "int", "enabled": true, "default": 1, "min": 1, "max": 5, "activation_probability": 0.08, "distribution": "choice"},
+    "unsharp_radius": {"type": "float", "enabled": true, "default": 0.0, "min": 0.0, "max": 3.0, "activation_probability": 0.18, "distribution": "uniform"},
+    "unsharp_percent": {"type": "int", "enabled": true, "default": 100, "min": 50, "max": 200, "activation_probability": 0.18, "distribution": "uniform"},
+    "sepia_blend": {"type": "float", "enabled": true, "default": 0.0, "min": 0.0, "max": 0.45, "activation_probability": 0.08, "distribution": "uniform"},
+    "grayscale_blend": {"type": "float", "enabled": true, "default": 0.0, "min": 0.0, "max": 1.0, "activation_probability": 0.08, "distribution": "uniform"},
+    "red_gain": {"type": "float", "enabled": true, "default": 1.0, "min": 0.85, "max": 1.15, "activation_probability": 0.2, "distribution": "triangular"},
+    "green_gain": {"type": "float", "enabled": true, "default": 1.0, "min": 0.85, "max": 1.15, "activation_probability": 0.2, "distribution": "triangular"},
+    "blue_gain": {"type": "float", "enabled": true, "default": 1.0, "min": 0.85, "max": 1.15, "activation_probability": 0.2, "distribution": "triangular"},
+    "canvas_padding": {"type": "float", "enabled": true, "default": 0.0, "min": 0.0, "max": 0.15, "activation_probability": 0.15, "distribution": "uniform"},
+    "background_mode": {"type": "choice", "enabled": true, "default": "light", "choices": ["light", "sampled"], "activation_probability": 1.0, "distribution": "choice"},
+    "border_width": {"type": "int", "enabled": true, "default": 0, "min": 0, "max": 20, "activation_probability": 0.1, "distribution": "uniform"},
+    "rounded_radius": {"type": "int", "enabled": false, "default": 0, "min": 0, "max": 80, "activation_probability": 0.0, "distribution": "uniform"},
+    "jpeg_quality": {"type": "int", "enabled": true, "default": 92, "min": 75, "max": 98, "activation_probability": 1.0, "distribution": "triangular"}
+  },
+  "compatibility_rules": [
+    {
+      "when": {"parameter": "rounded_radius", "operator": "gt", "value": 0},
+      "require": {"parameter": "canvas_padding", "operator": "gt", "value": 0},
+      "message": "rounded canvas requires positive canvas padding"
+    },
+    {
+      "when": {"parameter": "grayscale_blend", "operator": "gt", "value": 0},
+      "forbid": {"parameter": "sepia_blend", "operator": "gt", "value": 0},
+      "message": "grayscale and sepia blends cannot be active together"
+    }
+  ]
+}
