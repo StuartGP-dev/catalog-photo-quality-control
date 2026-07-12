@@ -24,6 +24,19 @@ def _sharpness(luminance: np.ndarray) -> float:
     return float((np.mean(horizontal * horizontal) + np.mean(vertical * vertical)) / 2)
 
 
+def structural_similarity(left: np.ndarray, right: np.ndarray) -> float:
+    """Deterministic luminance SSIM using the standard global formulation."""
+    c1, c2 = 0.01**2, 0.03**2
+    mean_left, mean_right = float(np.mean(left)), float(np.mean(right))
+    variance_left, variance_right = float(np.var(left)), float(np.var(right))
+    covariance = float(np.mean((left - mean_left) * (right - mean_right)))
+    numerator = (2 * mean_left * mean_right + c1) * (2 * covariance + c2)
+    denominator = (mean_left**2 + mean_right**2 + c1) * (
+        variance_left + variance_right + c2
+    )
+    return max(-1.0, min(1.0, numerator / max(denominator, 1e-12)))
+
+
 def image_metrics(source_path: Path, output_path: Path) -> dict[str, float]:
     source = _rgb(source_path)
     output = _rgb(output_path)
@@ -55,6 +68,7 @@ def image_metrics(source_path: Path, output_path: Path) -> dict[str, float]:
         "colorfulness": float(np.mean(channel_spread)),
         "pixel_mae": float(np.mean(np.abs(source - output_for_distance))),
         "luminance_mae": float(np.mean(np.abs(source_luma - distance_luma))),
+        "ssim": structural_similarity(source_luma, distance_luma),
     }
 
 

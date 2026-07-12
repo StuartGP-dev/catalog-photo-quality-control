@@ -22,8 +22,8 @@ def test_canonical_json_and_recipe_hash_ignore_mapping_order() -> None:
 def test_filter_space_loads_and_fills_canonical_defaults() -> None:
     space = load_filter_space()
 
-    first = space.schema.canonicalize({"brightness": 1.1, "contrast": 1})
-    second = space.schema.canonicalize({"contrast": 1.0, "brightness": 1.10})
+    first = space.schema.canonicalize({"brightness": 1.02, "contrast": 1})
+    second = space.schema.canonicalize({"contrast": 1.0, "brightness": 1.020})
 
     assert first.recipe_hash == second.recipe_hash
     assert set(first.parameters) == set(space.schema.parameters)
@@ -52,7 +52,7 @@ def test_unknown_and_incompatible_settings_fail_early() -> None:
             {"grayscale_blend": 0.5, "sepia_blend": 0.2}
         )
     with pytest.raises(ValueError, match="disabled"):
-        schema.canonicalize({"rounded_radius": 10, "canvas_padding": 0.1})
+        schema.canonicalize({"rounded_radius": 10, "canvas_padding": 0.01})
 
 
 def test_source_set_hash_is_ordered_and_changes_with_source(

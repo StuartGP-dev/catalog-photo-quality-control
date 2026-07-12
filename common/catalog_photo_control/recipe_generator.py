@@ -85,5 +85,8 @@ class RecipeGenerator:
             return RecipeProposal(self.random_recipe(), "random")
         parent = self.random.choice(list(proven))
         if draw < proven_limit:
-            return RecipeProposal(parent, "proven")
+            try:
+                return RecipeProposal(self.schema.canonicalize(parent.parameters), "proven")
+            except ValueError:
+                return RecipeProposal(self.random_recipe(), "random")
         return RecipeProposal(self.mutate(parent), "mutation")

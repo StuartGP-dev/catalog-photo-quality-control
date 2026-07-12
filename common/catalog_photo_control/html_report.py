@@ -54,6 +54,7 @@ def write_html_report(
         metrics = html.escape(
             json.dumps(json.loads(variant["aggregate_metrics_json"]), indent=2, ensure_ascii=False)
         )
+        aggregate = json.loads(variant["aggregate_metrics_json"])
         distance_components = html.escape(
             json.dumps(
                 json.loads(variant["minimum_distance_components_json"]),
@@ -68,6 +69,10 @@ def write_html_report(
             <p>Quality: {variant['quality_score']:.4f} · Distance from original:
             {variant['distance_from_original']:.4f} · Minimum selected distance:
             {variant['minimum_selected_distance'] if variant['minimum_selected_distance'] is not None else 'seed'}</p>
+            <p>Minimum SSIM: {aggregate.get('min_ssim', 'n/a')} · Maximum pixel MAE: {aggregate.get('max_pixel_mae', 'n/a')}
+            · Maximum luminance MAE: {aggregate.get('max_luminance_mae', 'n/a')} · Maximum sharpness ratio: {aggregate.get('max_sharpness_ratio', 'n/a')}</p>
+            <p>Active parameters: {aggregate.get('active_parameter_count', 0)} · Recipe intensity: {aggregate.get('recipe_intensity', 0)}
+            · {html.escape(', '.join(aggregate.get('active_parameters', [])) or 'none')}</p>
             <p><a href="{folder}">Open local variant folder</a></p>
             <div class="images">{image_html}</div>
             <details><summary>Canonical recipe</summary><pre>{recipe}</pre></details>

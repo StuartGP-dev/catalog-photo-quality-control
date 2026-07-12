@@ -15,7 +15,7 @@ from .paths import LocalPaths
 from .recipe_generator import RecipeGenerator
 from .recipe_learning import listing_context_key, proven_recipes
 from .selector import load_eligible_candidates, select_and_persist
-from .source_loader import load_source_listing
+from .source_loader import load_source_listing, resolve_listing_reference
 from .variants_db import VariantsDatabase
 
 
@@ -56,17 +56,6 @@ def _safe_listing(code: str) -> str:
     return "".join(character if character.isalnum() or character in "-_" else "_" for character in safe) or "listing"
 
 
-def _resolve_listing(value: str, source_root: str | None) -> tuple[Path, str]:
-    direct = Path(value)
-    if direct.is_dir():
-        return direct.resolve(), direct.name
-    if source_root is None:
-        raise FileNotFoundError(
-            f"listing path does not exist and --source-root was not supplied: {value}"
-        )
-    return (Path(source_root) / Path(value)).resolve(), value.replace("\\", "/")
-
-
 def _cleanup_work(bench: BenchDatabase, run_work: Path) -> None:
     prefix = str(run_work.resolve())
     with bench.connection:
@@ -91,7 +80,7 @@ def _cleanup_work(bench: BenchDatabase, run_work: Path) -> None:
 
 
 def run_benchmark(args: argparse.Namespace) -> tuple[str, Path, dict[str, int]]:
-    listing_dir, listing_code = _resolve_listing(args.listing, args.source_root)
+    listing_dir, listing_code = resolve_listing_reference(args.listing, args.source_root)
     listing = load_source_listing(listing_dir, listing_code=listing_code)
     paths = LocalPaths.from_root(args.local_root)
     paths.ensure_runtime_directories()
@@ -119,7 +108,7 @@ def run_benchmark(args: argparse.Namespace) -> tuple[str, Path, dict[str, int]]:
         variants.initialize()
         bench.register_source(listing)
         variants.register_source(listing)
-        bench.start_run(run_id, listing, args.target_variants, started_at)
+        bench.start_run(run_id, listing, args.target_variants, started_at, space.evaluation_config_hash)
         stale = 0
         try:
             while True:
@@ -161,12 +150,17 @@ def run_benchmark(args: argparse.Namespace) -> tuple[str, Path, dict[str, int]]:
                     proposal.recipe,
                     run_work,
                     space.quality_thresholds,
+                    space.evaluation_config_hash,
                     force=False,
                 )
                 counters["tested"] += 1
                 counters["cached"] += int(execution.cached)
                 counters["valid"] += int(execution.complete and execution.quality_valid)
                 counters["rejected"] += int(not execution.quality_valid)
+                if execution.error:
+                    for reason in execution.error.split(","):
+                        key = f"rejected_{reason.split(':')[-1]}"
+                        counters[key] = counters.get(key, 0) + 1
                 bench.add_run_test(
                     run_id, execution.test_id, proposal.source, cached=execution.cached
                 )

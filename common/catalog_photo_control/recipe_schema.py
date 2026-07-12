@@ -90,11 +90,13 @@ class ParameterSpec:
 class RecipeSchema:
     parameters: Mapping[str, ParameterSpec]
     compatibility_rules: tuple[Mapping[str, Any], ...]
+    maximum_active_parameters: int
+    maximum_recipe_intensity: float
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> "RecipeSchema":
-        if raw.get("version") != 1:
-            raise ValueError("filter space version must be 1")
+        if raw.get("version") not in {1, 2}:
+            raise ValueError("unsupported filter space version")
         parameter_data = raw.get("parameters")
         if not isinstance(parameter_data, Mapping) or not parameter_data:
             raise ValueError("filter space parameters must be a non-empty mapping")
@@ -105,7 +107,13 @@ class RecipeSchema:
         rules = raw.get("compatibility_rules", [])
         if not isinstance(rules, list):
             raise ValueError("compatibility_rules must be a list")
-        schema = cls(parameters, tuple(rules))
+        quality = raw.get("quality_thresholds", {})
+        schema = cls(
+            parameters,
+            tuple(rules),
+            int(quality.get("maximum_active_parameters", 4)),
+            float(quality.get("maximum_recipe_intensity", 1.35)),
+        )
         schema.canonicalize({})
         return schema
 
@@ -118,6 +126,11 @@ class RecipeSchema:
             for name, spec in sorted(self.parameters.items())
         }
         self._validate_compatibility(values)
+        analysis = analyze_recipe(values, self.parameters)
+        if analysis.active_parameter_count > self.maximum_active_parameters:
+            raise ValueError("too_many_active_parameters")
+        if analysis.recipe_intensity > self.maximum_recipe_intensity:
+            raise ValueError("recipe_too_intense")
         return Recipe.from_parameters(values)
 
     def _matches(self, condition: Mapping[str, Any], values: Mapping[str, Any]) -> bool:
@@ -139,3 +152,33 @@ class RecipeSchema:
                     raise ValueError(rule.get("message", "compatibility requirement failed"))
                 if isinstance(forbid, Mapping) and self._matches(forbid, values):
                     raise ValueError(rule.get("message", "forbidden parameter combination"))
+
+
+@dataclass(frozen=True, slots=True)
+class RecipeAnalysis:
+    active_parameter_count: int
+    recipe_intensity: float
+    active_parameters: tuple[str, ...]
+
+
+def analyze_recipe(
+    values: Mapping[str, Any], specs: Mapping[str, ParameterSpec]
+) -> RecipeAnalysis:
+    active: list[str] = []
+    intensity = 0.0
+    for name, spec in sorted(specs.items()):
+        if name == "jpeg_quality":
+            continue
+        value = values.get(name, spec.default)
+        if value == spec.default:
+            continue
+        active.append(name)
+        if spec.kind == "choice":
+            intensity += 1.0
+        else:
+            span = max(
+                abs(float(spec.minimum) - float(spec.default)),
+                abs(float(spec.maximum) - float(spec.default)),
+            )
+            intensity += abs(float(value) - float(spec.default)) / max(span, 1e-12)
+    return RecipeAnalysis(len(active), round(intensity, 12), tuple(active))

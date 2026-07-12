@@ -31,7 +31,7 @@ def test_duplicate_recipe_test_is_prevented(
     synthetic_listing: Path, tmp_path: Path
 ) -> None:
     listing = load_source_listing(synthetic_listing, listing_code="synthetic")
-    recipe = load_filter_space().schema.canonicalize({"brightness": 1.1})
+    recipe = load_filter_space().schema.canonicalize({"brightness": 1.02})
     test = RecipeTest(
         None, listing.listing_id, listing.source_set_hash, recipe,
         True, True, True, {"quality": 0.8}

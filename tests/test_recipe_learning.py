@@ -19,7 +19,7 @@ def test_successful_recipe_can_seed_another_listing(
 ) -> None:
     listing = load_source_listing(synthetic_listing, listing_code="first")
     space = load_filter_space()
-    recipe = space.schema.canonicalize({"contrast": 1.05})
+    recipe = space.schema.canonicalize({"contrast": 1.03})
     database = BenchDatabase(tmp_path / "bench.sqlite3")
     database.initialize()
     database.register_source(listing)

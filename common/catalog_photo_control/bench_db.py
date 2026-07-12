@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS bench_runs (
     started_at TEXT NOT NULL,
     finished_at TEXT,
     counters_json TEXT NOT NULL DEFAULT '{}'
+    ,evaluation_config_hash TEXT NOT NULL DEFAULT 'legacy'
 );
 CREATE TABLE IF NOT EXISTS recipes (
     recipe_id INTEGER PRIMARY KEY,
@@ -77,8 +78,9 @@ CREATE TABLE IF NOT EXISTS recipe_tests (
     error_text TEXT,
     retained_output_dir TEXT,
     context_key TEXT NOT NULL DEFAULT 'unknown',
+    evaluation_config_hash TEXT NOT NULL DEFAULT 'legacy',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (listing_id, source_set_hash, recipe_id)
+    UNIQUE (listing_id, source_set_hash, recipe_id, evaluation_config_hash)
 );
 CREATE INDEX IF NOT EXISTS idx_recipe_tests_candidates
     ON recipe_tests(listing_id, source_set_hash, complete, quality_valid, eligible);
@@ -154,6 +156,10 @@ class BenchDatabase:
 
     def initialize(self) -> None:
         self.connection.executescript(SCHEMA)
+        for table, column in (("bench_runs", "evaluation_config_hash"), ("recipe_tests", "evaluation_config_hash")):
+            columns = {row[1] for row in self.connection.execute(f"PRAGMA table_info({table})")}
+            if column not in columns:
+                self.connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT NOT NULL DEFAULT 'legacy'")
         self.connection.commit()
 
     @contextmanager
@@ -206,18 +212,20 @@ class BenchDatabase:
         listing: SourceListing,
         target_variants: int,
         started_at: str,
+        evaluation_config_hash: str = "legacy",
     ) -> None:
         with self.connection:
             self.connection.execute(
                 """INSERT INTO bench_runs
-                   (run_id, listing_id, source_set_hash, target_variants, status, started_at)
-                   VALUES (?, ?, ?, ?, 'running', ?)""",
+                   (run_id, listing_id, source_set_hash, target_variants, status, started_at,
+                    evaluation_config_hash) VALUES (?, ?, ?, ?, 'running', ?, ?)""",
                 (
                     run_id,
                     listing.listing_id,
                     listing.source_set_hash,
                     target_variants,
                     started_at,
+                    evaluation_config_hash,
                 ),
             )
 
@@ -249,13 +257,15 @@ class BenchDatabase:
         return int(row[0])
 
     def cached_test(
-        self, listing_id: str, source_set_hash: str, recipe_hash: str
+        self, listing_id: str, source_set_hash: str, recipe_hash: str,
+        evaluation_config_hash: str = "legacy",
     ) -> sqlite3.Row | None:
         return self.connection.execute(
             """SELECT t.*, r.recipe_hash, r.parameters_json
                FROM recipe_tests t JOIN recipes r USING(recipe_id)
-               WHERE t.listing_id=? AND t.source_set_hash=? AND r.recipe_hash=?""",
-            (listing_id, source_set_hash, recipe_hash),
+               WHERE t.listing_id=? AND t.source_set_hash=? AND r.recipe_hash=?
+                 AND t.evaluation_config_hash=?""",
+            (listing_id, source_set_hash, recipe_hash, evaluation_config_hash),
         ).fetchone()
 
     def record_test(
@@ -265,6 +275,7 @@ class BenchDatabase:
         *,
         retained_output_dir: str | None = None,
         context_key: str = "unknown",
+        evaluation_config_hash: str = "legacy",
     ) -> int:
         recipe_id = self.recipe_id(test.recipe)
         with self.transaction() as connection:
@@ -272,8 +283,8 @@ class BenchDatabase:
                 """INSERT INTO recipe_tests
                    (listing_id, source_set_hash, recipe_id, complete, quality_valid,
                     eligible, aggregate_metrics_json, error_text, retained_output_dir,
-                    context_key)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    context_key, evaluation_config_hash)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     test.listing_id,
                     test.source_set_hash,
@@ -285,6 +296,7 @@ class BenchDatabase:
                     test.error,
                     retained_output_dir,
                     context_key,
+                    evaluation_config_hash,
                 ),
             )
             test_id = int(cursor.lastrowid)
@@ -324,6 +336,7 @@ class BenchDatabase:
         recipe: Recipe,
         work_root: str | Path,
         quality_thresholds: Mapping[str, float],
+        evaluation_config_hash: str = "legacy",
         *,
         force: bool = False,
     ) -> TestExecution:
@@ -333,7 +346,8 @@ class BenchDatabase:
         from .recipe_learning import listing_context_key, refresh_recipe_statistics
 
         cached = self.cached_test(
-            listing.listing_id, listing.source_set_hash, recipe.recipe_hash
+            listing.listing_id, listing.source_set_hash, recipe.recipe_hash,
+            evaluation_config_hash,
         )
         if cached is not None and not force:
             return TestExecution(
@@ -367,6 +381,14 @@ class BenchDatabase:
                 for source, output in zip(listing.images, rendered.images, strict=True)
             ]
             aggregate = aggregate_metrics(metric_rows)
+            from .recipe_schema import analyze_recipe
+            from .config import load_filter_space
+            analysis = analyze_recipe(recipe.parameters, load_filter_space().schema.parameters)
+            aggregate.update({
+                "active_parameter_count": float(analysis.active_parameter_count),
+                "recipe_intensity": analysis.recipe_intensity,
+                "active_parameters": list(analysis.active_parameters),
+            })
             quality = evaluate_quality(metric_rows, quality_thresholds)
             aggregate["quality_score"] = quality.score
             rows = [
@@ -396,6 +418,7 @@ class BenchDatabase:
                 rows,
                 retained_output_dir=str(output_dir) if quality.valid else None,
                 context_key=context_key,
+                evaluation_config_hash=evaluation_config_hash,
             )
             refresh_recipe_statistics(self.connection, self.recipe_id(recipe))
             if not quality.valid:
@@ -426,7 +449,7 @@ class BenchDatabase:
                 {},
                 error=f"{type(error).__name__}: {error}",
             )
-            test_id = self.record_test(test, [], context_key=context_key)
+            test_id = self.record_test(test, [], context_key=context_key, evaluation_config_hash=evaluation_config_hash)
             refresh_recipe_statistics(self.connection, self.recipe_id(recipe))
             return TestExecution(
                 test_id, False, False, False, False, {}, None, test.error

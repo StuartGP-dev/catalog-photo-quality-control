@@ -18,6 +18,10 @@ def evaluate_quality(
         return QualityResult(False, 0.0, ("no_images",))
     max_clip = float(thresholds.get("maximum_clip_fraction", 0.2))
     min_sharpness = float(thresholds.get("minimum_sharpness_ratio", 0.35))
+    max_sharpness = float(thresholds.get("maximum_sharpness_ratio", 1.8))
+    max_pixel_mae = float(thresholds.get("maximum_pixel_mae", 0.055))
+    max_luminance_mae = float(thresholds.get("maximum_luminance_mae", 0.045))
+    min_ssim = float(thresholds.get("minimum_ssim", 0.97))
     minimum_quality = float(thresholds.get("minimum_quality", 0.35))
     reasons: list[str] = []
     image_scores: list[float] = []
@@ -32,10 +36,18 @@ def evaluate_quality(
         )
         image_scores.append(score)
         if clip > max_clip:
-            reasons.append(f"image_{index}:clip_fraction")
+            reasons.append("fidelity_clip_fraction")
         if sharpness < min_sharpness:
-            reasons.append(f"image_{index}:sharpness_ratio")
+            reasons.append("fidelity_sharpness")
+        if sharpness > max_sharpness:
+            reasons.append("fidelity_sharpness")
+        if float(metrics["pixel_mae"]) > max_pixel_mae:
+            reasons.append("fidelity_pixel_mae")
+        if float(metrics["luminance_mae"]) > max_luminance_mae:
+            reasons.append("fidelity_luminance_mae")
+        if float(metrics["ssim"]) < min_ssim:
+            reasons.append("fidelity_ssim")
     listing_score = min(image_scores)
     if listing_score < minimum_quality:
         reasons.append("listing:minimum_quality")
-    return QualityResult(not reasons, listing_score, tuple(reasons))
+    return QualityResult(not reasons, listing_score, tuple(dict.fromkeys(reasons)))

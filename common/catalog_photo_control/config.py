@@ -5,7 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from .models import stable_hash
 from .recipe_schema import RecipeSchema
+
+METRICS_VERSION = "fidelity-v2-ssim-global"
 
 
 DEFAULT_FILTER_SPACE = Path(__file__).resolve().parents[2] / "config" / "filter_space.json"
@@ -17,6 +20,7 @@ class FilterSpace:
     proposal_allocation: Mapping[str, float]
     quality_thresholds: Mapping[str, float]
     selection_pool_multiplier: int
+    evaluation_config_hash: str
     raw: Mapping[str, Any]
 
 
@@ -48,5 +52,6 @@ def load_filter_space(path: str | Path = DEFAULT_FILTER_SPACE) -> FilterSpace:
         {str(key): float(value) for key, value in allocation.items()},
         {str(key): float(value) for key, value in thresholds.items()},
         pool_multiplier,
+        stable_hash({"filter_space": raw, "metrics_version": METRICS_VERSION}),
         raw,
     )

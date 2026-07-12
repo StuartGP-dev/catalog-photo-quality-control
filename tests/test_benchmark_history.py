@@ -12,7 +12,7 @@ def test_recipe_test_is_cached_and_source_change_gets_new_test(
 ) -> None:
     listing = load_source_listing(synthetic_listing, listing_code="synthetic")
     space = load_filter_space()
-    recipe = space.schema.canonicalize({"brightness": 1.05})
+    recipe = space.schema.canonicalize({"brightness": 1.02})
     database = BenchDatabase(tmp_path / "bench.sqlite3")
     database.initialize()
     database.register_source(listing)
@@ -48,7 +48,7 @@ def test_rejected_test_keeps_metrics_but_removes_outputs(
 ) -> None:
     listing = load_source_listing(synthetic_listing, listing_code="synthetic")
     space = load_filter_space()
-    recipe = space.schema.canonicalize({"brightness": 1.3})
+    recipe = space.schema.canonicalize({"brightness": 1.02})
     database = BenchDatabase(tmp_path / "bench.sqlite3")
     database.initialize()
     database.register_source(listing)

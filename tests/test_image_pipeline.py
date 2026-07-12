@@ -14,7 +14,7 @@ def test_complete_listing_uses_one_recipe_and_is_reproducible(
 ) -> None:
     listing = load_source_listing(synthetic_listing, listing_code="synthetic")
     recipe = load_filter_space().schema.canonicalize(
-        {"brightness": 1.08, "rotation_degrees": 1.25, "jpeg_quality": 90}
+        {"brightness": 1.02, "rotation_degrees": 0.4, "jpeg_quality": 90}
     )
 
     first = render_listing(listing, recipe, tmp_path / "first")

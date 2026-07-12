@@ -44,7 +44,7 @@ def test_complete_selection_resumes_and_stops_at_target(
     variants = VariantsDatabase(tmp_path / "variants.sqlite3")
     variants.initialize()
     variants.register_source(listing)
-    for index, brightness in enumerate((0.95, 1.0, 1.05), start=1):
+    for index, brightness in enumerate((0.98, 1.0, 1.02), start=1):
         recipe = space.schema.canonicalize({"brightness": brightness})
         execution = bench.execute_recipe_test(
             listing, recipe, tmp_path / f"work-{index}", space.quality_thresholds
