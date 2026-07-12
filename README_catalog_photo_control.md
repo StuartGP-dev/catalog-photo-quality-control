@@ -83,6 +83,41 @@ Le détail des tables et invariants se trouve dans
 [`config/filter_space.json`](config/filter_space.json) ; il n’existe aucun profil
 fixe.
 
+## Enveloppe de fidélité
+
+L'espace livré limite chaque recette à quatre paramètres non neutres et à une
+intensité maximale de `1.35`. L'intensité est la somme déterministe, pour chaque
+paramètre actif hors encodage, de `abs(value-default) / max(abs(min-default),
+abs(max-default))`. `jpeg_quality` et les valeurs neutres ne sont pas comptés.
+
+Chaque image doit respecter : SSIM ≥ `0.97`, pixel MAE ≤ `0.055`, luminance MAE
+≤ `0.045`, ratio de netteté entre `0.55` et `1.8`, fraction écrêtée ≤ `0.035`.
+Une seule image hors enveloppe rejette le variant complet. Le hash de cache
+inclut l'intégralité de `filter_space.json` et la version des métriques.
+
+## Purge des résultats générés
+
+```powershell
+# Une annonce, chemin direct
+python -m common.catalog_photo_control.purge --listing "C:\catalogue\bijoux\O\O18"
+
+# Une annonce, racine et clé relative
+python -m common.catalog_photo_control.purge --source-root "C:\catalogue" --listing "bijoux/O/O18"
+
+# Prévisualisation ou version source courante seulement
+python -m common.catalog_photo_control.purge --listing "C:\catalogue\bijoux\O\O18" --dry-run
+python -m common.catalog_photo_control.purge --listing "C:\catalogue\bijoux\O\O18" --current-source-only
+
+# Toutes les données gérées, avec réinitialisation des schémas
+python -m common.catalog_photo_control.purge --all --yes --reinitialize
+```
+
+La purge ne touche jamais aux sources ni aux autres fichiers de `local/`. Pour
+une annonce, la base variants est attachée à la connexion benchmark avec SQLite
+`ATTACH DATABASE` et les deux ensembles de lignes sont validés dans une seule
+transaction. Les dossiers collectés avant transaction ne sont supprimés
+qu'après le commit ; un échec DB conserve donc tous les fichiers.
+
 ## Confidentialité des métadonnées
 
 Le refactor ne contient pas de pipeline de métadonnées. L’utilitaire autonome

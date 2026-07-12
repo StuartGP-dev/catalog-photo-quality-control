@@ -17,7 +17,10 @@ attempted canonical recipe.
   inter-annonces.
 
 The unique key `(listing_id, source_set_hash, recipe_id)` prevents recomputing a
-recipe for the same ordered source version. Rejected image files are removed,
+recipe for the same ordered source version. The effective cache key additionally
+contains `evaluation_config_hash`, derived from the complete filter space,
+quality thresholds, compatibility rules, probabilities, and metrics version.
+Rejected image files are removed,
 while their hashes and metrics remain queryable.
 
 ## Final variants database
@@ -46,3 +49,7 @@ Source paths are read-only. Rendering happens in a temporary generated
 directory; the directory is renamed to its final location only after every image
 succeeds. Final selection copies a complete candidate to another temporary
 directory before database commit. All generated state belongs below `local/`.
+
+Scoped purge attaches `catalog_variants.sqlite3` to the benchmark connection and
+deletes both schemas inside one SQLite transaction. Filesystem paths are removed
+only after commit, limiting partial failure to harmless leftover generated files.

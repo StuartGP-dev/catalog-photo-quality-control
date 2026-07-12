@@ -12,6 +12,15 @@ from .models import SourceImage, SourceListing, ordered_source_set_hash, stable_
 SUPPORTED_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"})
 
 
+def resolve_listing_reference(value: str, source_root: str | None = None) -> tuple[Path, str]:
+    direct = Path(value)
+    if direct.is_dir():
+        return direct.resolve(), direct.name
+    if source_root is None:
+        raise FileNotFoundError(f"listing path does not exist and --source-root was not supplied: {value}")
+    return (Path(source_root) / Path(value)).resolve(), value.replace("\\", "/")
+
+
 def hash_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:

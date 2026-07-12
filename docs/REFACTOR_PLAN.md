@@ -455,3 +455,11 @@ Required automated tests:
 - Do not perform a repository-wide rewrite in one commit.
 - Before each destructive deletion, remove imports and prove the replacement path with tests.
 - Do not merge into `main` until the final smoke test passes and the branch diff has been reviewed.
+
+## Post-refactor fidelity and purge hardening
+
+The default search envelope is intentionally subtle: at most four active
+parameters, bounded normalized recipe intensity, and per-image SSIM, MAE,
+sharpness, and clipping barriers. Cache identity includes the complete effective
+evaluation configuration. `common.catalog_photo_control.purge` is the sole
+command for scoped or global removal of pipeline-managed results.
