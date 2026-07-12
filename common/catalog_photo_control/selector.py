@@ -169,20 +169,20 @@ def select_and_persist(
         for candidate in load_eligible_candidates(bench_connection, listing)
         if candidate.recipe.recipe_hash not in existing_hashes
     ]
-    existing_signatures = {
-        tuple((int(row[0]), int(row[1])) for row in variants.connection.execute(
-            "SELECT output_width, output_height FROM listing_variant_images WHERE variant_id=? ORDER BY image_index", (variant_id,)
-        ))
-        for (variant_id,) in variants.connection.execute(
-            "SELECT variant_id FROM listing_variants WHERE listing_id=? AND source_set_hash=? AND status='ready'", (listing.listing_id, listing.source_set_hash)
+    seen_dimensions = {
+        (int(row[0]), int(row[1]))
+        for row in variants.connection.execute(
+            """SELECT image.output_width, image.output_height
+               FROM listing_variant_images image JOIN listing_variants variant USING(variant_id)
+               WHERE variant.listing_id=? AND variant.source_set_hash=? AND variant.status='ready'""",
+            (listing.listing_id, listing.source_set_hash),
         )
     }
     unique_candidates: list[Candidate] = []
-    seen = set(existing_signatures)
     for candidate in candidates:
-        signature = tuple((int(image.metrics.get("output_width", 0)), int(image.metrics.get("output_height", 0))) for image in candidate.images)
-        if signature not in seen:
-            seen.add(signature); unique_candidates.append(candidate)
+        dimensions = {(int(image.metrics.get("output_width", 0)), int(image.metrics.get("output_height", 0))) for image in candidate.images}
+        if len(dimensions) == len(candidate.images) and dimensions.isdisjoint(seen_dimensions):
+            seen_dimensions.update(dimensions); unique_candidates.append(candidate)
     candidates = unique_candidates
     selections = select_max_min(candidates, needed, existing_metrics=existing_metrics)
     root = Path(selected_root).resolve()
