@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS listing_variant_images (
     source_hash TEXT NOT NULL,
     output_path TEXT NOT NULL,
     output_hash TEXT NOT NULL,
+    output_width INTEGER NOT NULL DEFAULT 1,
+    output_height INTEGER NOT NULL DEFAULT 1,
     metrics_json TEXT NOT NULL,
     PRIMARY KEY(variant_id, image_index)
 );
@@ -118,6 +120,10 @@ class VariantsDatabase:
 
     def initialize(self) -> None:
         self.connection.executescript(SCHEMA)
+        columns = {row[1] for row in self.connection.execute("PRAGMA table_info(listing_variant_images)")}
+        for column in ("output_width", "output_height"):
+            if column not in columns:
+                self.connection.execute(f"ALTER TABLE listing_variant_images ADD COLUMN {column} INTEGER NOT NULL DEFAULT 1")
         self.connection.commit()
 
     @contextmanager
@@ -171,6 +177,16 @@ class VariantsDatabase:
         if len(image_rows) != len(variant.image_paths) or not image_rows:
             raise ValueError("variant image rows must exactly match variant paths")
         with self.transaction() as connection:
+            for row in image_rows:
+                duplicate = connection.execute(
+                    """SELECT 1 FROM listing_variant_images image
+                       JOIN listing_variants variant USING(variant_id)
+                       WHERE variant.listing_id=? AND variant.source_set_hash=?
+                         AND image.image_index=? AND image.output_width=? AND image.output_height=?""",
+                    (variant.listing_id, variant.source_set_hash, int(row["image_index"]), int(row.get("output_width", row.get("metrics", {}).get("output_width", 1))), int(row.get("output_height", row.get("metrics", {}).get("output_height", 1)))),
+                ).fetchone()
+                if duplicate:
+                    raise ValueError("duplicate output pixel dimensions for source image")
             cursor = connection.execute(
                 """INSERT INTO listing_variants
                    (listing_id, source_set_hash, recipe_hash, recipe_json,
@@ -204,8 +220,8 @@ class VariantsDatabase:
             variant_id = int(cursor.lastrowid)
             connection.executemany(
                 """INSERT INTO listing_variant_images
-                   (variant_id, image_index, source_hash, output_path, output_hash, metrics_json)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                   (variant_id, image_index, source_hash, output_path, output_hash, metrics_json, output_width, output_height)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
                     (
                         variant_id,
@@ -214,6 +230,8 @@ class VariantsDatabase:
                         str(row["output_path"]),
                         str(row["output_hash"]),
                         canonical_json(row.get("metrics", {})),
+                        int(row.get("output_width", row.get("metrics", {}).get("output_width", 1))),
+                        int(row.get("output_height", row.get("metrics", {}).get("output_height", 1))),
                     )
                     for row in image_rows
                 ],

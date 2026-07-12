@@ -377,7 +377,7 @@ class BenchDatabase:
             if len(rendered.images) != len(listing.images):
                 raise RuntimeError("render did not cover every source image")
             metric_rows = [
-                image_metrics(source.path, output.output_path)
+                image_metrics(source.path, output.output_path, output.canvas_metadata)
                 for source, output in zip(listing.images, rendered.images, strict=True)
             ]
             aggregate = aggregate_metrics(metric_rows)
@@ -388,6 +388,8 @@ class BenchDatabase:
                 "active_parameter_count": float(analysis.active_parameter_count),
                 "recipe_intensity": analysis.recipe_intensity,
                 "active_parameters": list(analysis.active_parameters),
+                "canvas_mode": recipe.parameters.get("canvas_mode", "none"),
+                "canvas_mode_code": float(("none", "white", "light_gray", "sampled_background", "sampled_edge", "side_bands", "uniform_frame").index(str(recipe.parameters.get("canvas_mode", "none")))),
             })
             quality = evaluate_quality(metric_rows, quality_thresholds)
             aggregate["quality_score"] = quality.score
@@ -399,6 +401,8 @@ class BenchDatabase:
                     "output_path": str(output.output_path) if quality.valid else None,
                     "output_hash": output.output_hash,
                     "metrics": metrics,
+                    "output_width": output.width,
+                    "output_height": output.height,
                 }
                 for output, metrics in zip(rendered.images, metric_rows, strict=True)
             ]

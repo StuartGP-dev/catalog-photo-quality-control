@@ -174,7 +174,7 @@ def analyze_recipe(
             continue
         active.append(name)
         if spec.kind == "choice":
-            intensity += 1.0
+            intensity += 0.25
         else:
             span = max(
                 abs(float(spec.minimum) - float(spec.default)),

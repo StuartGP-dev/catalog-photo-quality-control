@@ -52,7 +52,7 @@ def test_unknown_and_incompatible_settings_fail_early() -> None:
             {"grayscale_blend": 0.5, "sepia_blend": 0.2}
         )
     with pytest.raises(ValueError, match="disabled"):
-        schema.canonicalize({"rounded_radius": 10, "canvas_padding": 0.01})
+        schema.canonicalize({"rounded_radius": 10, "canvas_padding_x": 0.01})
 
 
 def test_source_set_hash_is_ordered_and_changes_with_source(

@@ -42,18 +42,25 @@
     "red_gain": {"type": "float", "enabled": true, "default": 1.0, "min": 0.985, "max": 1.015, "activation_probability": 0.08, "distribution": "triangular"},
     "green_gain": {"type": "float", "enabled": true, "default": 1.0, "min": 0.985, "max": 1.015, "activation_probability": 0.08, "distribution": "triangular"},
     "blue_gain": {"type": "float", "enabled": true, "default": 1.0, "min": 0.985, "max": 1.015, "activation_probability": 0.08, "distribution": "triangular"},
-    "canvas_padding": {"type": "float", "enabled": true, "default": 0.0, "min": 0.0, "max": 0.015, "activation_probability": 0.04, "distribution": "uniform"},
-    "background_mode": {"type": "choice", "enabled": false, "default": "light", "choices": ["light", "sampled"], "activation_probability": 0.0, "distribution": "choice"},
+    "canvas_mode": {"type": "choice", "enabled": true, "default": "none", "choices": ["none", "white", "light_gray", "sampled_background", "sampled_edge", "side_bands", "uniform_frame"], "activation_probability": 0.32, "distribution": "choice"},
+    "canvas_padding_x": {"type": "float", "enabled": true, "default": 0.0, "min": 0.0, "max": 0.03, "activation_probability": 0.0, "distribution": "triangular"},
+    "canvas_padding_y": {"type": "float", "enabled": true, "default": 0.0, "min": 0.0, "max": 0.018, "activation_probability": 0.0, "distribution": "triangular"},
+    "side_band_width": {"type": "float", "enabled": true, "default": 0.0, "min": 0.0, "max": 0.035, "activation_probability": 0.0, "distribution": "triangular"},
+    "uniform_frame_width": {"type": "float", "enabled": true, "default": 0.0, "min": 0.0, "max": 0.02, "activation_probability": 0.0, "distribution": "triangular"},
+    "fixed_background_gray": {"type": "int", "enabled": true, "default": 246, "min": 238, "max": 250, "activation_probability": 0.0, "distribution": "triangular"},
+    "sampled_color_strength": {"type": "float", "enabled": true, "default": 0.9, "min": 0.75, "max": 1.0, "activation_probability": 0.0, "distribution": "triangular"},
+    "sampled_edge_fraction": {"type": "float", "enabled": true, "default": 0.08, "min": 0.05, "max": 0.12, "activation_probability": 0.0, "distribution": "triangular"},
+    "sampled_saturation_limit": {"type": "float", "enabled": true, "default": 0.18, "min": 0.12, "max": 0.25, "activation_probability": 0.0, "distribution": "triangular"},
+    "sampled_lightness_minimum": {"type": "float", "enabled": true, "default": 0.7, "min": 0.62, "max": 0.82, "activation_probability": 0.0, "distribution": "triangular"},
+    "canvas_alignment": {"type": "choice", "enabled": false, "default": "center", "choices": ["center"], "activation_probability": 0.0, "distribution": "choice"},
+    "canvas_resample_method": {"type": "choice", "enabled": false, "default": "lanczos", "choices": ["lanczos"], "activation_probability": 0.0, "distribution": "choice"},
     "border_width": {"type": "int", "enabled": false, "default": 0, "min": 0, "max": 4, "activation_probability": 0.0, "distribution": "uniform"},
     "rounded_radius": {"type": "int", "enabled": false, "default": 0, "min": 0, "max": 80, "activation_probability": 0.0, "distribution": "uniform"},
     "jpeg_quality": {"type": "int", "enabled": true, "default": 93, "min": 90, "max": 96, "activation_probability": 1.0, "distribution": "triangular"}
   },
   "compatibility_rules": [
-    {
-      "when": {"parameter": "rounded_radius", "operator": "gt", "value": 0},
-      "require": {"parameter": "canvas_padding", "operator": "gt", "value": 0},
-      "message": "rounded canvas requires positive canvas padding"
-    },
+    {"when": {"parameter": "canvas_mode", "operator": "ne", "value": "none"}, "forbid": {"parameter": "crop_fraction", "operator": "gt", "value": 0.01}, "message": "canvas cannot be combined with significant crop"},
+    {"when": {"parameter": "canvas_mode", "operator": "ne", "value": "none"}, "forbid": {"parameter": "zoom", "operator": "gt", "value": 1.01}, "message": "canvas cannot be combined with significant zoom"},
     {
       "when": {"parameter": "grayscale_blend", "operator": "gt", "value": 0},
       "forbid": {"parameter": "sepia_blend", "operator": "gt", "value": 0},

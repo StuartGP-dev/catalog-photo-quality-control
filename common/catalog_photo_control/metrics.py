@@ -37,10 +37,17 @@ def structural_similarity(left: np.ndarray, right: np.ndarray) -> float:
     return max(-1.0, min(1.0, numerator / max(denominator, 1e-12)))
 
 
-def image_metrics(source_path: Path, output_path: Path) -> dict[str, float]:
+def image_metrics(source_path: Path, output_path: Path, canvas_metadata: Mapping[str, object] | None = None) -> dict[str, object]:
     source = _rgb(source_path)
     output = _rgb(output_path)
-    if output.shape[:2] != source.shape[:2]:
+    metadata = canvas_metadata or {}
+    content_box = metadata.get("content_box")
+    if content_box:
+        with Image.open(output_path) as opened:
+            content = opened.convert("RGB").crop(tuple(content_box))
+            content = content.resize((source.shape[1], source.shape[0]), Image.Resampling.BILINEAR)
+            output_for_distance = np.asarray(content, dtype=np.float32) / 255.0
+    elif output.shape[:2] != source.shape[:2]:
         with Image.open(output_path) as opened:
             resized = opened.convert("RGB").resize(
                 (source.shape[1], source.shape[0]), Image.Resampling.BILINEAR
@@ -54,12 +61,12 @@ def image_metrics(source_path: Path, output_path: Path) -> dict[str, float]:
     source_sharpness = _sharpness(source_luma)
     output_sharpness = _sharpness(output_luma)
     sharpness_ratio = (
-        1.0 if source_sharpness < 1e-9 and output_sharpness < 1e-9
+        1.0 if source_sharpness < 1e-6
         else output_sharpness / max(source_sharpness, 1e-9)
     )
     clip_fraction = float(np.mean((output_luma <= 0.01) | (output_luma >= 0.99)))
     channel_spread = np.max(output, axis=2) - np.min(output, axis=2)
-    return {
+    metrics = {
         "brightness": float(np.mean(output_luma)),
         "contrast": float(np.std(output_luma)),
         "sharpness": output_sharpness,
@@ -69,14 +76,21 @@ def image_metrics(source_path: Path, output_path: Path) -> dict[str, float]:
         "pixel_mae": float(np.mean(np.abs(source - output_for_distance))),
         "luminance_mae": float(np.mean(np.abs(source_luma - distance_luma))),
         "ssim": structural_similarity(source_luma, distance_luma),
+        "content_ssim": structural_similarity(source_luma, distance_luma),
+        "canvas_fraction": float(metadata.get("canvas_fraction", 0.0)),
+        "foreground_scale_ratio": float(metadata.get("foreground_scale_ratio", 1.0)),
+        "output_width": float(output.shape[1]),
+        "output_height": float(output.shape[0]),
     }
+    metrics.update({key: metadata[key] for key in ("sampled_background_rgb", "sampled_background_confidence", "sampled_background_fallback_used", "background_rgb", "background_origin", "canvas_mode") if key in metadata})
+    return metrics
 
 
-def aggregate_metrics(rows: Sequence[Mapping[str, float]]) -> dict[str, float]:
+def aggregate_metrics(rows: Sequence[Mapping[str, object]]) -> dict[str, object]:
     if not rows:
         raise ValueError("cannot aggregate an empty metric set")
-    keys = set.intersection(*(set(row) for row in rows))
-    result: dict[str, float] = {}
+    keys = {key for key in set.intersection(*(set(row) for row in rows)) if all(isinstance(row[key], (int, float, bool)) for row in rows)}
+    result: dict[str, object] = {}
     for key in sorted(keys):
         values = [float(row[key]) for row in rows]
         result[f"mean_{key}"] = sum(values) / len(values)
@@ -96,6 +110,8 @@ def metric_distance(
         "mean_pixel_mae": 1.0,
         "mean_luminance_mae": 1.0,
         "mean_sharpness_ratio": 2.0,
+        "canvas_mode_code": 6.0,
+        "mean_canvas_fraction": 0.08,
     }
     components = {
         key: abs(float(left.get(key, 0)) - float(right.get(key, 0))) / scale

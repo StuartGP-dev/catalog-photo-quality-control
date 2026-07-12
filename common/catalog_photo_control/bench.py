@@ -154,8 +154,11 @@ def run_benchmark(args: argparse.Namespace) -> tuple[str, Path, dict[str, int]]:
                     force=False,
                 )
                 counters["tested"] += 1
+                canvas_active = proposal.recipe.parameters.get("canvas_mode", "none") != "none"
+                counters["canvas_tested"] = counters.get("canvas_tested", 0) + int(canvas_active)
                 counters["cached"] += int(execution.cached)
                 counters["valid"] += int(execution.complete and execution.quality_valid)
+                counters["canvas_valid"] = counters.get("canvas_valid", 0) + int(canvas_active and execution.quality_valid)
                 counters["rejected"] += int(not execution.quality_valid)
                 if execution.error:
                     for reason in execution.error.split(","):
@@ -176,6 +179,7 @@ def run_benchmark(args: argparse.Namespace) -> tuple[str, Path, dict[str, int]]:
                         selected_root,
                     )
                     counters["selected"] += len(new_ids)
+                    counters["canvas_selected"] = counters.get("canvas_selected", 0) + sum(1 for variant_id in new_ids if variants.connection.execute("SELECT recipe_json FROM listing_variants WHERE variant_id=?", (variant_id,)).fetchone()[0].find('"canvas_mode":"none"') < 0)
                 after = variants.ready_count(listing.listing_id, listing.source_set_hash)
                 if not args.quiet:
                     print(

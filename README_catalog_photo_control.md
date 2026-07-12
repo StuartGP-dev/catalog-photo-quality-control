@@ -95,6 +95,13 @@ Chaque image doit respecter : SSIM ≥ `0.97`, pixel MAE ≤ `0.055`, luminance 
 Une seule image hors enveloppe rejette le variant complet. Le hash de cache
 inclut l'intégralité de `filter_space.json` et la version des métriques.
 
+Les modes de canevas subtils sont `none`, `white`, `light_gray`,
+`sampled_background`, `sampled_edge`, `side_bands` et `uniform_frame`. Une
+signature déterministe de quelques pixels, dérivée du hash de recette et de
+l'index source, garantit que chaque sortie diffère des dimensions originales.
+La base finale refuse également une signature de dimensions déjà sélectionnée
+pour la même annonce et la même version source.
+
 ## Purge des résultats générés
 
 ```powershell

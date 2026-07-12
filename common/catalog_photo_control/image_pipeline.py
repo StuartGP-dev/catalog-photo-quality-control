@@ -7,6 +7,9 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+from typing import Any, Mapping
+
+import numpy as np
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps, ImageStat
 
@@ -21,6 +24,7 @@ class RenderedImage:
     output_hash: str
     width: int
     height: int
+    canvas_metadata: Mapping[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +54,21 @@ def _sample_background(image: Image.Image) -> tuple[int, int, int]:
         edges.paste(crop.resize((crop.width, band)), (offset, 0))
         offset += crop.width
     return tuple(round(value) for value in ImageStat.Stat(edges).mean[:3])
+
+
+def detect_background_color(image: Image.Image, edge_fraction: float = 0.08, saturation_limit: float = 0.18, lightness_minimum: float = 0.7) -> tuple[tuple[int, int, int], float, bool]:
+    rgb = np.asarray(image.convert("RGB"), dtype=np.float32) / 255.0
+    h, w = rgb.shape[:2]; band = max(1, round(min(h, w) * edge_fraction))
+    pixels = np.concatenate((rgb[:band].reshape(-1, 3), rgb[-band:].reshape(-1, 3), rgb[:, :band].reshape(-1, 3), rgb[:, -band:].reshape(-1, 3)))
+    saturation = pixels.max(axis=1) - pixels.min(axis=1); lightness = pixels.mean(axis=1)
+    valid = pixels[(saturation <= saturation_limit) & (lightness >= lightness_minimum)]
+    confidence = float(len(valid) / max(1, len(pixels)))
+    if len(valid) < max(16, len(pixels) * 0.25):
+        return (246, 246, 246), confidence, True
+    color = tuple(int(round(v * 255)) for v in np.median(valid, axis=0))
+    if max(color) - min(color) > round(saturation_limit * 255) or sum(color) / 3 < lightness_minimum * 255:
+        return (246, 246, 246), confidence, True
+    return color, confidence, False
 
 
 def _geometry(image: Image.Image, parameters: dict[str, object]) -> Image.Image:
@@ -93,7 +112,7 @@ def _geometry(image: Image.Image, parameters: dict[str, object]) -> Image.Image:
     return image
 
 
-def apply_recipe(image: Image.Image, recipe: Recipe) -> Image.Image:
+def apply_recipe(image: Image.Image, recipe: Recipe, *, dimension_salt: int = 0) -> Image.Image:
     """Apply the documented deterministic order to one image.
 
     Order: orientation/mode, photometric, color, geometry, detail, style,
@@ -152,15 +171,24 @@ def apply_recipe(image: Image.Image, recipe: Recipe) -> Image.Image:
     sepia = ImageOps.colorize(sepia_gray, "#2b1b0e", "#f4d8a8")
     result = _blend(result, sepia, float(p["sepia_blend"]))
 
-    padding = float(p["canvas_padding"])
+    mode = str(p["canvas_mode"])
     border = int(p["border_width"])
-    if padding or border:
-        pad_x = round(result.width * padding) + border
-        pad_y = round(result.height * padding) + border
-        background = (245, 245, 245) if p["background_mode"] == "light" else _sample_background(result)
-        canvas = Image.new("RGB", (result.width + 2 * pad_x, result.height + 2 * pad_y), background)
-        canvas.paste(result, (pad_x, pad_y))
-        result = canvas
+    detected, confidence, fallback = detect_background_color(result, float(p["sampled_edge_fraction"]), float(p["sampled_saturation_limit"]), float(p["sampled_lightness_minimum"]))
+    gray = int(p["fixed_background_gray"])
+    background = (255, 255, 255) if mode == "white" else (gray, gray, gray)
+    origin = "fixed"
+    if mode in {"sampled_background", "sampled_edge"}:
+        strength = float(p["sampled_color_strength"]); background = tuple(round(v * strength + 255 * (1 - strength)) for v in detected); origin = "fallback" if fallback else mode
+    pad_x = pad_y = 0
+    if mode == "side_bands": pad_x = max(1, round(result.width * float(p["side_band_width"]))); background = detected if not fallback else (246, 246, 246); origin = "sampled_edge" if not fallback else "fallback"
+    elif mode == "uniform_frame": pad_x = max(1, round(result.width * float(p["uniform_frame_width"]))); pad_y = max(1, round(result.height * float(p["uniform_frame_width"]))); background = detected if not fallback else (246, 246, 246); origin = "sampled_edge" if not fallback else "fallback"
+    elif mode != "none": pad_x = max(1, round(result.width * float(p["canvas_padding_x"]))); pad_y = max(1, round(result.height * float(p["canvas_padding_y"])))
+    # A deterministic few-pixel signature guarantees dimensions differ from the source.
+    extra_x = 1 + (int(recipe.recipe_hash[:4], 16) + dimension_salt * 7) % 17; extra_y = 1 + (int(recipe.recipe_hash[4:8], 16) + dimension_salt * 5) % 13
+    left = pad_x + extra_x // 2; top = pad_y + extra_y // 2
+    canvas = Image.new("RGB", (result.width + 2 * pad_x + extra_x, result.height + 2 * pad_y + extra_y), background)
+    canvas.paste(result, (left, top)); content_box = (left, top, left + result.width, top + result.height); result = canvas
+    result.info["canvas_metadata"] = {"canvas_mode": mode, "background_rgb": background, "background_origin": origin if mode != "none" else "dimension_signature", "sampled_background_rgb": detected, "sampled_background_confidence": confidence, "sampled_background_fallback_used": fallback, "content_box": content_box, "canvas_fraction": 1.0 - (content_box[2]-content_box[0])*(content_box[3]-content_box[1])/(result.width*result.height), "foreground_scale_ratio": 1.0, "padding_x": pad_x, "padding_y": pad_y}
     radius = int(p["rounded_radius"])
     if radius:
         mask = Image.new("L", result.size, 0)
@@ -199,7 +227,7 @@ def render_listing(
             if before_image is not None:
                 before_image(source.index)
             with Image.open(source.path) as opened:
-                output = apply_recipe(opened, recipe)
+                output = apply_recipe(opened, recipe, dimension_salt=source.index)
             output_path = temporary / f"image_{source.index:04d}.jpg"
             output.save(
                 output_path,
@@ -218,6 +246,7 @@ def render_listing(
                     _sha256(output_path),
                     output.width,
                     output.height,
+                    dict(output.info.get("canvas_metadata", {})),
                 )
             )
         if len(rendered) != len(listing.images):
@@ -234,6 +263,7 @@ def render_listing(
             item.output_hash,
             item.width,
             item.height,
+            item.canvas_metadata,
         )
         for item in rendered
     )

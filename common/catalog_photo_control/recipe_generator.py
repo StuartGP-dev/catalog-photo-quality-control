@@ -49,6 +49,19 @@ class RecipeGenerator:
             for name, spec in self.schema.parameters.items():
                 active = spec.enabled and self.random.random() < spec.activation_probability
                 values[name] = self._sample_value(spec) if active else spec.default
+            mode_spec = self.schema.parameters.get("canvas_mode")
+            if mode_spec:
+                values["canvas_mode"] = mode_spec.default
+            if mode_spec and mode_spec.enabled and self.random.random() < mode_spec.activation_probability:
+                mode = self.random.choice(["white", "white", "light_gray", "light_gray", "sampled_background", "sampled_background", "sampled_edge", "side_bands", "uniform_frame"])
+                values["canvas_mode"] = mode
+                if mode == "side_bands":
+                    values["side_band_width"] = self.random.triangular(0.008, 0.035, 0.014)
+                elif mode == "uniform_frame":
+                    values["uniform_frame_width"] = self.random.triangular(0.005, 0.02, 0.009)
+                else:
+                    values["canvas_padding_x"] = self.random.triangular(0.004, 0.03, 0.01)
+                    values["canvas_padding_y"] = self.random.triangular(0.002, 0.018, 0.006)
             try:
                 return self.schema.canonicalize(values)
             except ValueError:

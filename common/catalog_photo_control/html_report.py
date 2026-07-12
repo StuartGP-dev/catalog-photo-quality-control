@@ -55,6 +55,7 @@ def write_html_report(
             json.dumps(json.loads(variant["aggregate_metrics_json"]), indent=2, ensure_ascii=False)
         )
         aggregate = json.loads(variant["aggregate_metrics_json"])
+        recipe_values = json.loads(variant["recipe_json"])
         distance_components = html.escape(
             json.dumps(
                 json.loads(variant["minimum_distance_components_json"]),
@@ -73,6 +74,9 @@ def write_html_report(
             · Maximum luminance MAE: {aggregate.get('max_luminance_mae', 'n/a')} · Maximum sharpness ratio: {aggregate.get('max_sharpness_ratio', 'n/a')}</p>
             <p>Active parameters: {aggregate.get('active_parameter_count', 0)} · Recipe intensity: {aggregate.get('recipe_intensity', 0)}
             · {html.escape(', '.join(aggregate.get('active_parameters', [])) or 'none')}</p>
+            <p>Canvas: {html.escape(str(recipe_values.get('canvas_mode', 'none')))} · horizontal {recipe_values.get('canvas_padding_x', 0)} · vertical {recipe_values.get('canvas_padding_y', 0)}
+            · background {aggregate.get('sampled_background_rgb', aggregate.get('background_rgb', 'per-image'))} · confidence {aggregate.get('mean_sampled_background_confidence', 'per-image')}
+            · canvas fraction {aggregate.get('mean_canvas_fraction', 0)} · foreground scale {aggregate.get('mean_foreground_scale_ratio', 1)}</p>
             <p><a href="{folder}">Open local variant folder</a></p>
             <div class="images">{image_html}</div>
             <details><summary>Canonical recipe</summary><pre>{recipe}</pre></details>

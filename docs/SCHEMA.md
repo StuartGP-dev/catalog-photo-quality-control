@@ -33,7 +33,11 @@ variants.
   minimum-selected distances with separately inspectable components, and
   reserved content fields;
 - `listing_variant_images`: every output in source order with source/output
-  hashes and per-image metrics.
+  hashes, pixel dimensions, canvas/background diagnostics, and per-image metrics.
+
+For a listing source version, selected variants cannot reuse the same ordered
+pixel-dimension signature. Dimensions include a small deterministic recipe and
+source-index signature, so outputs never equal their originals in both axes.
 
 Reserved fields are `title_text`, `description_text`, `price_cents`, `currency`,
 `metadata_json`, and `metadata_status`. They are intentionally not populated by
