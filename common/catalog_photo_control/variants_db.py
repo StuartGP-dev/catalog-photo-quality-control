@@ -182,8 +182,8 @@ class VariantsDatabase:
                     """SELECT 1 FROM listing_variant_images image
                        JOIN listing_variants variant USING(variant_id)
                        WHERE variant.listing_id=? AND variant.source_set_hash=?
-                         AND image.image_index=? AND image.output_width=? AND image.output_height=?""",
-                    (variant.listing_id, variant.source_set_hash, int(row["image_index"]), int(row.get("output_width", row.get("metrics", {}).get("output_width", 1))), int(row.get("output_height", row.get("metrics", {}).get("output_height", 1)))),
+                         AND image.output_width=? AND image.output_height=?""",
+                    (variant.listing_id, variant.source_set_hash, int(row.get("output_width", row.get("metrics", {}).get("output_width", 1))), int(row.get("output_height", row.get("metrics", {}).get("output_height", 1)))),
                 ).fetchone()
                 if duplicate:
                     raise ValueError("duplicate output pixel dimensions for source image")
