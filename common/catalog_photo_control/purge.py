@@ -5,6 +5,7 @@ import json
 import shutil
 import sqlite3
 import sys
+from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -115,7 +116,7 @@ def purge_all(local_root: Path, dry_run: bool, reinitialize: bool) -> PurgeSumma
     paths = LocalPaths.from_root(local_root); summary = PurgeSummary("all")
     for database, tables in ((paths.bench_database, ("bench_runs", "recipe_tests", "recipe_test_images", "recipe_pair_distances")), (paths.variants_database, ("listing_variants", "listing_variant_images"))):
         if database.exists():
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection:
                 for table in tables:
                     try: summary.rows[table] = _count(connection, f"SELECT COUNT(*) FROM {table}")
                     except sqlite3.DatabaseError: summary.rows[table] = 0

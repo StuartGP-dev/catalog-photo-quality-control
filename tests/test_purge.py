@@ -45,6 +45,8 @@ def test_current_only_and_rollback(synthetic_listing: Path, tmp_path: Path) -> N
 def test_global_requires_yes_and_can_reinitialize(tmp_path: Path) -> None:
     assert main(["--all", "--local-root", str(tmp_path / "local")]) == 2
     unrelated = tmp_path / "local" / "keep.txt"; unrelated.parent.mkdir(); unrelated.write_text("keep")
+    from common.catalog_photo_control.bench_db import initialize_databases
+    initialize_databases(tmp_path / "local")
     assert main(["--all", "--yes", "--reinitialize", "--local-root", str(tmp_path / "local")]) == 0
     assert unrelated.is_file()
     for name in ("catalog_bench.sqlite3", "catalog_variants.sqlite3"): assert (tmp_path / "local" / "databases" / name).is_file()
