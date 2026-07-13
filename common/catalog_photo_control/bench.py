@@ -208,6 +208,12 @@ def run_benchmark(args: argparse.Namespace) -> tuple[str, Path, dict[str, int]]:
         except BaseException as error:
             stop_reason, status, caught = "error", "error", error
         finally:
+            if space.diversity_gate.get("enabled", False):
+                from .diversity_analysis import refresh_ready_diversity
+
+                refresh_ready_diversity(
+                    variants.connection, space.diversity_gate, listing.listing_code
+                )
             obtained = variants.ready_count(listing.listing_id, listing.source_set_hash)
             counters["obtained"] = obtained
             selected_rows = variants.connection.execute(

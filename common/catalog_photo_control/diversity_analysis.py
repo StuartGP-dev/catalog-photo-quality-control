@@ -102,39 +102,37 @@ def load_analysis_images(connection: sqlite3.Connection, listing_code: str | Non
     return images
 
 
-def analyze_pairs(images: Sequence[AnalysisImage], scope: str = "both", weights: Mapping[str, float] | None = None) -> list[PairAnalysis]:
+def analyze_pairs(images: Sequence[AnalysisImage], scope: str = "both", weights: Mapping[str, float] | None = None, config: Mapping[str, object] | None = None) -> list[PairAnalysis]:
     signatures = {image.output_hash: visual_signature(image.path) for image in images}
     pairs: list[PairAnalysis] = []
     ordered = sorted(images, key=lambda item: (item.image_index, item.listing_id, item.variant_id or -1, item.output_hash))
-    for offset, left in enumerate(ordered):
-        for right in ordered[offset + 1:]:
-            if right.image_index != left.image_index:
-                if right.image_index > left.image_index:
-                    break
+    for candidate in ordered:
+        if candidate.kind != "ready_variant":
+            continue
+        candidate_weights = dict(weights or {})
+        if config:
+            candidate_weights.update(dict(config.get("weights", {})))
+            candidate_weights.update(dict(config.get("family_weights", {}).get(candidate.recipe_family, {})))
+        for reference in ordered:
+            if reference.image_index != candidate.image_index:
                 continue
-            if left.kind != "ready_variant" and right.kind != "ready_variant":
+            if candidate.output_hash == reference.output_hash or candidate.variant_id == reference.variant_id and candidate.listing_id == reference.listing_id:
                 continue
-            if left.output_hash == right.output_hash or left.variant_id is not None and left.variant_id == right.variant_id and left.listing_id == right.listing_id:
-                continue
-            candidate, reference = (left, right) if left.kind == "ready_variant" else (right, left)
-            pair_scope = "listing" if left.listing_id == right.listing_id and left.source_set_hash == right.source_set_hash else "catalog"
+            pair_scope = "listing" if candidate.listing_id == reference.listing_id and candidate.source_set_hash == reference.source_set_hash else "catalog"
             if scope != "both" and pair_scope != scope:
                 continue
-            pairs.append(PairAnalysis(candidate, reference, pair_scope, image_distance(signatures[candidate.output_hash], signatures[reference.output_hash], weights)))
+            pairs.append(PairAnalysis(candidate, reference, pair_scope, image_distance(signatures[candidate.output_hash], signatures[reference.output_hash], candidate_weights)))
     return pairs
 
 
 def nearest_pairs(pairs: Sequence[PairAnalysis]) -> list[PairAnalysis]:
     nearest: dict[tuple[str, int, int, str], PairAnalysis] = {}
     for pair in pairs:
-        for candidate, reference in ((pair.candidate, pair.reference), (pair.reference, pair.candidate)):
-            if candidate.variant_id is None:
-                continue
-            reversed_pair = PairAnalysis(candidate, reference, pair.scope, pair.distance)
-            key = (candidate.listing_id, candidate.variant_id, candidate.image_index, pair.scope)
-            current = nearest.get(key)
-            if current is None or (pair.distance.total_distance, reference.output_hash) < (current.distance.total_distance, current.reference.output_hash):
-                nearest[key] = reversed_pair
+        candidate, reference = pair.candidate, pair.reference
+        key = (candidate.listing_id, int(candidate.variant_id or 0), candidate.image_index, pair.scope)
+        current = nearest.get(key)
+        if current is None or (pair.distance.total_distance, reference.output_hash) < (current.distance.total_distance, current.reference.output_hash):
+            nearest[key] = pair
     return sorted(nearest.values(), key=lambda pair: pair.distance.total_distance)
 
 
@@ -169,6 +167,73 @@ def threshold_outcomes(nearest: Sequence[PairAnalysis], thresholds: Sequence[flo
             "images_too_close": sum(pair.distance.total_distance < threshold for pair in nearest),
         })
     return outcomes
+
+
+def configured_outcome(nearest: Sequence[PairAnalysis], config: Mapping[str, object]) -> dict[str, object]:
+    rejected_variants: set[tuple[str, int]] = set()
+    rejected_images: list[dict[str, object]] = []
+    scope = str(config.get("scope", "both"))
+    family_thresholds = config.get("family_thresholds", {})
+    for pair in nearest:
+        if scope != "both" and pair.scope != scope:
+            continue
+        key = "minimum_same_listing_distance" if pair.scope == "listing" else "minimum_catalog_distance"
+        threshold = float(family_thresholds.get(pair.candidate.recipe_family, {}).get(key, config.get(key, 0)))
+        if pair.distance.total_distance < threshold:
+            rejected_variants.add((pair.candidate.listing_id, int(pair.candidate.variant_id or 0)))
+            rejected_images.append({"variant_id": pair.candidate.variant_id, "image_index": pair.candidate.image_index, "family": pair.candidate.recipe_family, "scope": pair.scope, "distance": pair.distance.total_distance, "threshold": threshold, "reference_variant_id": pair.reference.variant_id})
+    return {"variants_violating_current_config": len(rejected_variants), "images_violating_current_config": len(rejected_images), "violations": rejected_images}
+
+
+def refresh_ready_diversity(connection: sqlite3.Connection, config: Mapping[str, object], listing_code: str | None = None) -> dict[str, object]:
+    """Refresh exact final nearest-neighbor fields after all ready variants exist."""
+    images = load_analysis_images(connection, listing_code)
+    pairs = analyze_pairs(images, str(config.get("scope", "both")), config=config)
+    nearest = nearest_pairs(pairs)
+    outcome = configured_outcome(nearest, config)
+    if outcome["variants_violating_current_config"]:
+        raise ValueError(f"ready variants violate diversity gate: {outcome['violations']}")
+    pair_counts: dict[tuple[str, int, int, str], int] = {}
+    for pair in pairs:
+        key = (pair.candidate.listing_id, int(pair.candidate.variant_id or 0), pair.candidate.image_index, pair.scope)
+        pair_counts[key] = pair_counts.get(key, 0) + 1
+    by_image = {(pair.candidate.listing_id, int(pair.candidate.variant_id or 0), pair.candidate.image_index, pair.scope): pair for pair in nearest}
+    def payload(pair: PairAnalysis | None) -> str:
+        if pair is None:
+            return "{}"
+        reference = pair.reference
+        return json.dumps({
+            "listing_id": reference.listing_id, "source_set_hash": reference.source_set_hash,
+            "variant_id": reference.variant_id, "image_index": reference.image_index,
+            "output_hash": reference.output_hash, "path": str(reference.path),
+            "reference_kind": reference.kind, "recipe_family": reference.recipe_family,
+            "total_distance": pair.distance.total_distance, "components": pair.distance.components(),
+        }, sort_keys=True, separators=(",", ":"))
+    variant_minima: dict[int, dict[str, list[float]]] = {}
+    with connection:
+        for image in images:
+            if image.variant_id is None:
+                continue
+            base = (image.listing_id, image.variant_id, image.image_index)
+            same = by_image.get((*base, "listing")); catalog = by_image.get((*base, "catalog"))
+            connection.execute(
+                """UPDATE listing_variant_images SET nearest_same_listing_json=?,
+                          nearest_catalog_json=?, reference_count_same_listing=?,
+                          reference_count_catalog=?
+                   WHERE variant_id=? AND image_index=?""",
+                (payload(same), payload(catalog), pair_counts.get((*base, "listing"), 0), pair_counts.get((*base, "catalog"), 0), image.variant_id, image.image_index),
+            )
+            minima = variant_minima.setdefault(image.variant_id, {"listing": [], "catalog": []})
+            if same: minima["listing"].append(same.distance.total_distance)
+            if catalog: minima["catalog"].append(catalog.distance.total_distance)
+        for variant_id, values in variant_minima.items():
+            connection.execute(
+                """UPDATE listing_variants SET minimum_same_listing_distance=?,
+                          minimum_catalog_distance=?, diversity_valid=1
+                   WHERE variant_id=?""",
+                (min(values["listing"]) if values["listing"] else None, min(values["catalog"]) if values["catalog"] else None, variant_id),
+            )
+    return outcome
 
 
 def _difference_map(left: Path, right: Path, output: Path) -> None:

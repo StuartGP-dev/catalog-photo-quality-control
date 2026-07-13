@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from .config import load_filter_space
-from .diversity_analysis import analysis_summary, analyze_pairs, load_analysis_images, nearest_pairs, threshold_outcomes, write_analysis_html
+from .diversity_analysis import analysis_summary, analyze_pairs, configured_outcome, load_analysis_images, nearest_pairs, threshold_outcomes, write_analysis_html
 from .paths import LocalPaths
 
 
@@ -28,10 +28,10 @@ def run_audit(args: argparse.Namespace) -> dict[str, object]:
     connection.row_factory = sqlite3.Row
     before = database.stat()
     try:
-        images = load_analysis_images(connection, args.listing_code)
-        pairs = analyze_pairs(images, args.scope)
-        summary = analysis_summary(pairs)
         config = load_filter_space(args.filter_space).diversity_gate
+        images = load_analysis_images(connection, args.listing_code)
+        pairs = analyze_pairs(images, args.scope, config=config)
+        summary = analysis_summary(pairs)
         thresholds = sorted({float(config.get("minimum_same_listing_distance", 0)), float(config.get("minimum_catalog_distance", 0))})
         nearest = nearest_pairs(pairs)
         result = {
@@ -43,10 +43,13 @@ def run_audit(args: argparse.Namespace) -> dict[str, object]:
             "missing_references": sum(1 for image in images if image.variant_id is not None and not any(pair.candidate == image or pair.reference == image for pair in pairs)),
             "summary": summary,
             "threshold_outcomes": threshold_outcomes(nearest, thresholds),
+            "configured_outcome": configured_outcome(nearest, config),
             "foreign_key_violations": [tuple(row) for row in connection.execute("PRAGMA foreign_key_check")],
         }
         if args.html:
-            write_analysis_html(Path(args.html).resolve(), pairs, summary, thresholds, args.top_nearest)
+            html_summary = dict(summary)
+            html_summary["configured_outcome"] = result["configured_outcome"]
+            write_analysis_html(Path(args.html).resolve(), pairs, html_summary, thresholds, args.top_nearest)
             result["html"] = str(Path(args.html).resolve())
     finally:
         connection.close()

@@ -130,7 +130,23 @@ class DiversityGate:
             (NearestReference(reference, image_distance(candidate, self._signature(reference.path), weights)) for reference in references),
             key=lambda item: (item.distance.total_distance, item.reference.output_hash),
         )
-        return tuple(rows[: self.config["nearest_neighbors_to_persist"]])
+        return tuple(rows)
+
+    def _weights(self, recipe_family: str) -> dict[str, float]:
+        weights = dict(self.config.get("weights", {}))
+        weights.update(dict(self.config.get("family_weights", {}).get(recipe_family, {})))
+        return weights
+
+    def _reverse_violation(self, candidate_path: Path, neighbors: Sequence[NearestReference], scope: str) -> bool:
+        candidate = self._signature(candidate_path)
+        for neighbor in neighbors:
+            reference = neighbor.reference
+            if reference.reference_kind != "ready_variant":
+                continue
+            reverse = image_distance(self._signature(reference.path), candidate, self._weights(reference.recipe_family))
+            if reverse.total_distance < self._threshold(scope, reference.recipe_family):
+                return True
+        return False
 
     def _threshold(self, scope: str, recipe_family: str) -> float:
         key = "minimum_same_listing_distance" if scope == "listing" else "minimum_catalog_distance"
@@ -139,8 +155,7 @@ class DiversityGate:
 
     def evaluate_image(self, listing_id: str, source_set_hash: str, image_index: int, candidate_path: Path, recipe_family: str) -> ImageDiversityVerdict:
         same, catalog = self.references(listing_id, source_set_hash, image_index)
-        weights = dict(self.config.get("weights", {}))
-        weights.update(dict(self.config.get("family_weights", {}).get(recipe_family, {})))
+        weights = self._weights(recipe_family)
         same_neighbors = self._neighbors(candidate_path, same, weights)
         catalog_neighbors = self._neighbors(candidate_path, catalog, weights)
         nearest_same = same_neighbors[0] if same_neighbors else None
@@ -149,8 +164,12 @@ class DiversityGate:
         reasons: list[str] = []
         if scope in {"listing", "both"} and nearest_same and nearest_same.distance.total_distance < self._threshold("listing", recipe_family):
             reasons.extend(("same_listing_distance_too_small", f"same_listing_distance_too_small_image_{image_index}"))
+        if scope in {"listing", "both"} and self._reverse_violation(candidate_path, same_neighbors, "listing"):
+            reasons.extend(("same_listing_distance_too_small", f"same_listing_reverse_distance_too_small_image_{image_index}"))
         if scope in {"catalog", "both"} and nearest_catalog and nearest_catalog.distance.total_distance < self._threshold("catalog", recipe_family):
             reasons.extend(("catalog_distance_too_small", f"catalog_distance_too_small_image_{image_index}"))
+        if scope in {"catalog", "both"} and self._reverse_violation(candidate_path, catalog_neighbors, "catalog"):
+            reasons.extend(("catalog_distance_too_small", f"catalog_reverse_distance_too_small_image_{image_index}"))
         missing = []
         if scope in {"listing", "both"} and nearest_same is None:
             missing.append("same_listing")
@@ -164,8 +183,8 @@ class DiversityGate:
             minimum_catalog_distance=nearest_catalog.distance.total_distance if nearest_catalog else None,
             nearest_same_listing=nearest_same,
             nearest_catalog=nearest_catalog,
-            same_listing_neighbors=same_neighbors,
-            catalog_neighbors=catalog_neighbors,
+            same_listing_neighbors=same_neighbors[: self.config["nearest_neighbors_to_persist"]],
+            catalog_neighbors=catalog_neighbors[: self.config["nearest_neighbors_to_persist"]],
             reference_count_same_listing=len(same),
             reference_count_catalog=len(catalog),
             reasons=tuple(reasons),

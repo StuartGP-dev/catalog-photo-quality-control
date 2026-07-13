@@ -565,7 +565,7 @@ def run_diversity_calibration(args: argparse.Namespace) -> tuple[Path, dict[str,
         images = load_analysis_images(connection, listing.listing_code)
         if not any(image.variant_id is not None for image in images):
             raise ValueError(f"no ready variants found for {listing.listing_code}")
-        pairs = analyze_pairs(images, args.distance_scope)
+        pairs = analyze_pairs(images, args.distance_scope, config=load_filter_space().diversity_gate)
     finally:
         connection.close()
     after = database.stat()

@@ -57,7 +57,7 @@ def _save_variant(db: VariantsDatabase, listing: SourceListing, root: Path, shif
         digest = _image(path, (90 + source.index * 20, 80, 130), shift=shift, size=(80 + rank, 60 + rank))
         paths.append(path)
         rows.append({"image_index": source.index, "source_hash": source.source_hash, "output_path": path, "output_hash": digest, "metrics": {"output_width": 80 + rank, "output_height": 60 + rank}})
-    return db.save_complete_variant(ListingVariant(None, listing.listing_id, listing.source_set_hash, recipe, tuple(paths), rank, diversity_gate_version=DISTANCE_METRICS_VERSION, diversity_valid=True), rows)
+    return db.save_complete_variant(ListingVariant(None, listing.listing_id, listing.source_set_hash, recipe, tuple(paths), rank, recipe_family="rotation_family", diversity_gate_version=DISTANCE_METRICS_VERSION, diversity_valid=True), rows)
 
 
 def test_image_distance_is_deterministic_bounded_and_explicit(tmp_path: Path) -> None:
@@ -157,3 +157,71 @@ def test_threshold_and_metrics_version_change_evaluation_hash(tmp_path: Path) ->
     raw["diversity_gate"]["metrics_version"] = "next-version"
     third = stable_hash(raw)
     assert len({first, second, third}) == 3
+
+
+def test_two_listing_smoke_rejects_collisions_atomically_at_indexes_zero_and_three(tmp_path: Path) -> None:
+    colors_a = [(90 + index * 20, 80, 130) for index in range(5)]
+    colors_b = [(70, 100 + index * 20, 150) for index in range(5)]
+    listings = (_listing(tmp_path, "A", colors_a), _listing(tmp_path, "B", colors_b))
+    database = VariantsDatabase(tmp_path / "variants.sqlite3")
+    database.initialize()
+    for listing in listings:
+        database.register_source(listing)
+
+    rejected_indexes = (0, 3)
+    for listing, collision_index in zip(listings, rejected_indexes, strict=True):
+        accepted_paths: list[Path] = []
+        for candidate_number, shift in enumerate((7, 7, -8), start=1):
+            paths = []
+            rows = []
+            for source in listing.images:
+                path = tmp_path / f"{listing.listing_code}-candidate-{candidate_number}-{source.index}.png"
+                color = colors_a[source.index] if listing.listing_code == "A" else colors_b[source.index]
+                digest = _image(path, color, shift=shift + candidate_number, size=(90 + candidate_number, 70 + candidate_number))
+                if candidate_number == 2 and source.index == collision_index:
+                    path.write_bytes(accepted_paths[source.index].read_bytes())
+                    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                paths.append(path)
+                rows.append({"image_index": source.index, "source_hash": source.source_hash, "output_path": path, "output_hash": digest, "metrics": {"output_width": 90 + candidate_number, "output_height": 70 + candidate_number}})
+            verdict = DiversityGate(database.connection, _config("listing", 0.005)).evaluate_variant(
+                listing.listing_id, listing.source_set_hash,
+                tuple((index, path) for index, path in enumerate(paths)),
+                "mixed_geometry_family",
+            )
+            if candidate_number == 2:
+                assert not verdict.valid
+                assert f"same_listing_distance_too_small_image_{collision_index}" in verdict.reasons
+                continue
+            recipe = Recipe.from_parameters({"candidate": candidate_number})
+            database.save_complete_variant(
+                ListingVariant(None, listing.listing_id, listing.source_set_hash, recipe, tuple(paths), 1 if candidate_number == 1 else 2, minimum_same_listing_distance=verdict.minimum_same_listing_distance, diversity_gate_version=DISTANCE_METRICS_VERSION, diversity_valid=verdict.valid),
+                rows,
+            )
+            if candidate_number == 1:
+                accepted_paths = paths
+
+    ready = database.connection.execute("SELECT variant_id, expected_image_count FROM listing_variants WHERE status='ready'").fetchall()
+    assert len(ready) == 4
+    assert all(row["expected_image_count"] == 5 for row in ready)
+    assert database.connection.execute("SELECT COUNT(*) FROM listing_variant_images").fetchone()[0] == 20
+    assert not database.connection.execute("PRAGMA foreign_key_check").fetchall()
+    database.close()
+
+
+def test_family_specific_gate_is_checked_in_both_directions(tmp_path: Path) -> None:
+    listing = _listing(tmp_path, "A", [(100, 80, 130)])
+    database = VariantsDatabase(tmp_path / "variants.sqlite3")
+    database.initialize(); database.register_source(listing)
+    _save_variant(database, listing, tmp_path, [5])  # rotation_family reference
+    candidate = tmp_path / "candidate.png"; _image(candidate, (100, 80, 130), shift=-7)
+    config = _config("listing", 0.0)
+    config["family_thresholds"] = {
+        "appearance_only": {"minimum_same_listing_distance": 0.0},
+        "rotation_family": {"minimum_same_listing_distance": 1.0},
+    }
+    verdict = DiversityGate(database.connection, config).evaluate_image(
+        listing.listing_id, listing.source_set_hash, 0, candidate, "appearance_only"
+    )
+    assert not verdict.valid
+    assert "same_listing_reverse_distance_too_small_image_0" in verdict.reasons
+    database.close()

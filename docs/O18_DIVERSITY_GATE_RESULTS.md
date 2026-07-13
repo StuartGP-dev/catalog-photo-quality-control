@@ -80,3 +80,45 @@ canevas obligatoire. Les plages de luminosité, saturation, chaleur et teinte
 n’ont pas été renforcées. Les contrôles de fidélité, de netteté, clipping,
 proportions, fond et visibilité complète du produit restent indépendants et
 continuent de s’appliquer avant la barrière de diversité.
+
+## Benchmark définitif
+
+Le run définitif `20260713T195045-da32475e` applique la barrière dans les deux
+sens : un nouveau candidat doit respecter son seuil et ne doit pas faire passer
+un variant déjà `ready` sous le seuil propre à la famille de ce dernier. La
+génération a duré 20 minutes ; rendu, sélection exacte et rapport ont porté la
+durée totale à 1 553,5 secondes.
+
+- 570 propositions, dont 138 reprises de cache ;
+- 464 rendus fidèles et 44 rejets comptabilisés pour proximité ;
+- 23 variants `ready`, tous complets avec cinq images ;
+- 9 apparence, 1 crop, 5 dézoom + canevas, 1 géométrie mixte, 5 rotations et
+  2 zooms ;
+- 45 images avec canevas : 15 bandes latérales, 15 gris clair, 10 fonds
+  échantillonnés et 5 bords échantillonnés ; aucun fond sombre ou saturé ;
+- aucun offset seul n'a survécu aux contrôles dans la fenêtre de 20 minutes.
+
+L'audit final recalculé sur disque contient 2 645 comparaisons dirigées et 115
+voisins minimaux. Il trouve **zéro violation** de la configuration, zéro
+référence manquante et zéro violation de clé étrangère. La distance minimale
+par index est 0,011047 (index 0), 0,013724 (index 1), 0,012056 (index 2),
+0,010356 (index 3) et 0,013819 (index 4). La distribution globale des voisins
+minimaux est : minimum 0,010356, moyenne 0,032232, médiane 0,023118 et maximum
+0,246332.
+
+Par rapport aux 150 variantes précédentes, la moyenne des voisins minimaux
+passe de 0,007339 à 0,032232 et la médiane de 0,005501 à 0,023118. Le nouvel
+ensemble est beaucoup moins dense ; la cible de 150 n'a pas été forcée.
+
+Les métriques de fidélité finales sont : SSIM direct minimal par variant
+0,7586 / 0,9172 / 0,9991 (minimum/moyenne/maximum), pixel MAE moyen
+0,00434 / 0,01646 / 0,03064 et luminance MAE moyenne
+0,00380 / 0,01631 / 0,03053. Le SSIM direct bas des transformations
+géométriques reste accompagné du garde-fou SSIM multi-échelle, de la netteté,
+du clipping et des limites MAE.
+
+Rapports locaux :
+
+- calibration : `local/diversity_calibration/O18/fd5c46392c1d-bcec4472ecbf/index.html` ;
+- benchmark : `local/bench_runs/O18/20260713T195045-da32475e/index.html` ;
+- audit exact : `local/diversity_audits/O18-final/index.html`.
