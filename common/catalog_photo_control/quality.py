@@ -12,7 +12,10 @@ class QualityResult:
 
 
 def evaluate_quality(
-    per_image: Sequence[Mapping[str, float]], thresholds: Mapping[str, float]
+    per_image: Sequence[Mapping[str, float]],
+    thresholds: Mapping[str, float],
+    *,
+    geometry_active: bool = False,
 ) -> QualityResult:
     if not per_image:
         return QualityResult(False, 0.0, ("no_images",))
@@ -22,6 +25,9 @@ def evaluate_quality(
     max_pixel_mae = float(thresholds.get("maximum_pixel_mae", 0.055))
     max_luminance_mae = float(thresholds.get("maximum_luminance_mae", 0.045))
     min_ssim = float(thresholds.get("minimum_ssim", 0.97))
+    min_geometry_ssim = float(
+        thresholds.get("minimum_perceptual_geometry_ssim", min_ssim)
+    )
     minimum_quality = float(thresholds.get("minimum_quality", 0.35))
     reasons: list[str] = []
     image_scores: list[float] = []
@@ -45,7 +51,13 @@ def evaluate_quality(
             reasons.append("fidelity_pixel_mae")
         if float(metrics["luminance_mae"]) > max_luminance_mae:
             reasons.append("fidelity_luminance_mae")
-        if float(metrics["ssim"]) < min_ssim:
+        if geometry_active:
+            geometry_ssim = float(
+                metrics.get("perceptual_geometry_ssim", metrics["ssim"])
+            )
+            if geometry_ssim < min_geometry_ssim:
+                reasons.append("fidelity_geometry_ssim")
+        elif float(metrics["ssim"]) < min_ssim:
             reasons.append("fidelity_ssim")
     listing_score = min(image_scores)
     if listing_score < minimum_quality:

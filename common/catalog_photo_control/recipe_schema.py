@@ -29,6 +29,7 @@ class ParameterSpec:
     choices: tuple[str, ...] = ()
     active_minimum: float | int | None = None
     active_maximum: float | int | None = None
+    active_absolute_minimum: float | int | None = None
 
     @classmethod
     def from_mapping(cls, name: str, raw: Mapping[str, Any]) -> "ParameterSpec":
@@ -51,6 +52,7 @@ class ParameterSpec:
         default = raw.get("default")
         active_minimum = raw.get("active_min")
         active_maximum = raw.get("active_max")
+        active_absolute_minimum = raw.get("active_min_abs")
         if kind in {"float", "int"}:
             if not isinstance(minimum, (int, float)) or not isinstance(
                 maximum, (int, float)
@@ -72,6 +74,12 @@ class ParameterSpec:
                 raise ValueError(f"{name}: active_max is outside configured range")
             if active_minimum is not None and active_maximum is not None and active_minimum > active_maximum:
                 raise ValueError(f"{name}: active_min exceeds active_max")
+            if active_absolute_minimum is not None and (
+                not isinstance(active_absolute_minimum, (int, float))
+                or active_absolute_minimum <= 0
+                or active_absolute_minimum > max(abs(minimum), abs(maximum))
+            ):
+                raise ValueError(f"{name}: active_min_abs is outside configured range")
         elif not choices or default not in choices:
             raise ValueError(f"{name}: choice default must occur in choices")
         return cls(
@@ -86,6 +94,7 @@ class ParameterSpec:
             choices,
             active_minimum,
             active_maximum,
+            active_absolute_minimum,
         )
 
     def normalize(self, value: Any) -> Any:
@@ -108,6 +117,14 @@ class ParameterSpec:
                 raise ValueError(
                     f"{self.name}: active value exceeds {self.active_maximum}"
                 )
+            if (
+                self.active_absolute_minimum is not None
+                and abs(value) < self.active_absolute_minimum
+            ):
+                raise ValueError(
+                    f"{self.name}: active absolute value is below "
+                    f"{self.active_absolute_minimum}"
+                )
         if not self.enabled and value != self.default:
             raise ValueError(f"{self.name}: parameter is disabled")
         return int(value) if self.kind == "int" else float(value)
@@ -123,7 +140,7 @@ class RecipeSchema:
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> "RecipeSchema":
-        if raw.get("version") not in {1, 2}:
+        if raw.get("version") not in {1, 2, 3}:
             raise ValueError("unsupported filter space version")
         parameter_data = raw.get("parameters")
         if not isinstance(parameter_data, Mapping) or not parameter_data:

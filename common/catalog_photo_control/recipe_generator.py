@@ -37,6 +37,15 @@ class RecipeGenerator:
             if int(spec.default) not in candidates:
                 candidates.append(int(spec.default))
             return self.random.choice(candidates)
+        if spec.active_absolute_minimum is not None:
+            magnitude = self.random.triangular(
+                float(spec.active_absolute_minimum),
+                max(abs(float(spec.minimum)), abs(float(spec.maximum))),
+                float(spec.active_absolute_minimum),
+            )
+            value = magnitude if self.random.random() < 0.5 else -magnitude
+            value = min(float(spec.maximum), max(float(spec.minimum), value))
+            return round(value) if spec.kind == "int" else value
         low = spec.active_minimum if spec.active_minimum is not None else spec.minimum
         high = spec.active_maximum if spec.active_maximum is not None else spec.maximum
         mode = min(high, max(low, spec.default))
@@ -68,17 +77,21 @@ class RecipeGenerator:
             values = self._defaults()
             template = self.random.choice(templates)
             rotation = self._between("rotation_degrees", -1.2, 1.2, 0.0)
-            if abs(rotation) < 0.18:
-                rotation = 0.18 if rotation >= 0 else -0.18
+            if abs(rotation) < 0.6:
+                rotation = 0.6 if rotation >= 0 else -0.6
             crop = self._between(
-                "crop_fraction", 0.003, 0.006 if template == "crop" else 0.012, 0.004
+                "crop_fraction", 0.006, 0.01 if template == "crop" else 0.012, 0.007
             )
             zoom = self._between(
-                "zoom", 1.001, 1.004 if template == "zoom" else 1.008, 1.003
+                "zoom", 1.006, 1.012 if template == "zoom" else 1.015, 1.008
             )
-            offset_x = self._between("offset_x", -0.007, 0.007, 0.0)
-            offset_y = self._between("offset_y", -0.007, 0.007, 0.0)
-            dezoom = self._between("resize_scale", 0.972, 0.995, 0.988)
+            offset_x = self._between("offset_x", -0.01, 0.01, 0.0)
+            offset_y = self._between("offset_y", -0.01, 0.01, 0.0)
+            if abs(offset_x) < 0.005:
+                offset_x = 0.005 if offset_x >= 0 else -0.005
+            if abs(offset_y) < 0.005:
+                offset_y = 0.005 if offset_y >= 0 else -0.005
+            dezoom = self._between("resize_scale", 0.97, 0.985, 0.98)
             if template.startswith("rotation"):
                 values["rotation_degrees"] = rotation
             if "crop" in template:

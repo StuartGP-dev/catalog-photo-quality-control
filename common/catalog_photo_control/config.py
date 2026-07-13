@@ -8,7 +8,7 @@ from typing import Any, Mapping
 from .models import stable_hash
 from .recipe_schema import RecipeSchema
 
-METRICS_VERSION = "fidelity-v2-ssim-global"
+METRICS_VERSION = "fidelity-v3-geometry-perceptual-ssim"
 
 
 DEFAULT_FILTER_SPACE = Path(__file__).resolve().parents[2] / "config" / "filter_space.json"

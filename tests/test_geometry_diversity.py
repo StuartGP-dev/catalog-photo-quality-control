@@ -115,11 +115,17 @@ def test_bounded_geometry_combinations_and_families_are_deterministic() -> None:
     assert any(
         classify_recipe_family(recipe.parameters) == "zoom_family"
         and recipe.parameters["offset_x"] == recipe.parameters["offset_y"] == 0
-        and 1.001 <= recipe.parameters["zoom"] <= 1.004
+        and 1.006 <= recipe.parameters["zoom"] <= 1.012
         for recipe in left
     )
     for recipe in left:
         p = recipe.parameters
+        if p["rotation_degrees"]:
+            assert abs(p["rotation_degrees"]) >= 0.6
+        if p["offset_x"]:
+            assert abs(p["offset_x"]) >= 0.005
+        if p["offset_y"]:
+            assert abs(p["offset_y"]) >= 0.005
         if p["resize_scale"] < 1:
             assert p["canvas_mode"] != "none"
         space.schema.canonicalize(p)

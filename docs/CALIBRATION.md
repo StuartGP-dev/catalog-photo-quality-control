@@ -55,3 +55,28 @@ Les barrières exploratoires sont SSIM ≥ 0,94, pixel MAE ≤ 0,04, luminance M
 des seuils de production. Aucune métrique ne prouve seule qu’un changement est
 perçu ou naturel : la décision finale exige l’inspection visuelle de toutes les
 images réelles.
+
+## Calibration O18 du 13 juillet 2026
+
+Les 192 exemples (960 rendus) ont été comparés sur les cinq images sources.
+Le début de la zone perceptible et naturelle a été observé vers 0,6° pour la
+rotation, 0,6 % pour le crop, 1,006 pour le zoom, 1,5 % de dézoom et 0,5 %
+pour les offsets. Les maxima prudents retenus sont respectivement 1,2°, 1,5 %,
+1,02, 3,5 % et 1,2 %. Les combinaisons inspectées à ces niveaux conservent le
+produit entier et des proportions naturelles.
+
+| Paramètre | Ancienne plage active | Nouvelle plage active |
+| --- | --- | --- |
+| Rotation | environ ±0,18–1,2° | ±0,6–1,2° |
+| Crop | 0,3–2 % | 0,6–1,5 % |
+| Zoom | 1,001–1,025 | 1,006–1,02 |
+| Dézoom | 0,5–3,5 % | 1,5–3,5 % |
+| Offset horizontal/vertical | proche de 0–2 % | ±0,5–1,2 % |
+
+Le SSIM direct reste stocké et affiché, mais il chute fortement avec un simple
+décalage ou une rotation sous le degré. Pour la seule barrière de fidélité des
+recettes géométriques, la production utilise donc aussi un SSIM déterministe
+sur luminance réduite à 64 × 64 et légèrement lissée, avec un minimum de 0,97.
+Ce garde-fou multi-échelle ne remplace ni les MAE, le clipping, la netteté, ni
+la revue visuelle. Les recettes d’apparence conservent le SSIM direct minimum
+de 0,97.

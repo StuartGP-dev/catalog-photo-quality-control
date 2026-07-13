@@ -511,7 +511,11 @@ class BenchDatabase:
             aggregate["sampled_background_rgb"] = [
                 row.get("sampled_background_rgb") for row in metric_rows
             ]
-            quality = evaluate_quality(metric_rows, quality_thresholds)
+            quality = evaluate_quality(
+                metric_rows,
+                quality_thresholds,
+                geometry_active=recipe_family != "appearance_only",
+            )
             aggregate["quality_score"] = quality.score
             rows = [
                 {

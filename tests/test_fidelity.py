@@ -29,7 +29,7 @@ def test_subtle_recipe_analysis_is_deterministic() -> None:
     assert analysis.recipe_intensity < schema.maximum_recipe_intensity
 
 def _metrics(**changes: float) -> dict[str, float]:
-    values = {"clip_fraction": 0.0, "sharpness_ratio": 1.0, "brightness": 0.5, "pixel_mae": 0.01, "luminance_mae": 0.01, "ssim": 0.995}
+    values = {"clip_fraction": 0.0, "sharpness_ratio": 1.0, "brightness": 0.5, "pixel_mae": 0.01, "luminance_mae": 0.01, "ssim": 0.995, "perceptual_geometry_ssim": 0.995}
     values.update(changes); return values
 
 @pytest.mark.parametrize("changes,reason", [
@@ -41,6 +41,23 @@ def test_each_image_fidelity_barrier_rejects(changes, reason) -> None:
 
 def test_subtle_image_metrics_are_accepted() -> None:
     assert evaluate_quality([_metrics(), _metrics(ssim=0.98)], load_filter_space().quality_thresholds).valid
+
+
+def test_geometry_uses_multiscale_fidelity_without_hiding_direct_ssim() -> None:
+    thresholds = load_filter_space().quality_thresholds
+    accepted = evaluate_quality(
+        [_metrics(ssim=0.86, perceptual_geometry_ssim=0.985)],
+        thresholds,
+        geometry_active=True,
+    )
+    rejected = evaluate_quality(
+        [_metrics(ssim=0.999, perceptual_geometry_ssim=0.94)],
+        thresholds,
+        geometry_active=True,
+    )
+    assert accepted.valid
+    assert not rejected.valid
+    assert "fidelity_geometry_ssim" in rejected.reasons
 
 def test_cache_is_scoped_by_evaluation_config_hash(synthetic_listing: Path, tmp_path: Path) -> None:
     listing = load_source_listing(synthetic_listing, listing_code="cache")

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image, ImageFilter, ImageOps
 
 
 def _rgb(path: Path) -> np.ndarray:
@@ -35,6 +35,23 @@ def structural_similarity(left: np.ndarray, right: np.ndarray) -> float:
         variance_left + variance_right + c2
     )
     return max(-1.0, min(1.0, numerator / max(denominator, 1e-12)))
+
+
+def perceptual_geometry_ssim(left: np.ndarray, right: np.ndarray) -> float:
+    """Low-resolution SSIM used only as a geometry-tolerant fidelity guard.
+
+    Direct SSIM remains available for inspection. Downsampling avoids treating a
+    natural sub-degree rotation like a destructive photometric transformation.
+    """
+    arrays = []
+    for luminance in (left, right):
+        image = Image.fromarray(
+            np.clip(luminance * 255.0, 0, 255).astype(np.uint8), mode="L"
+        )
+        image = image.resize((64, 64), Image.Resampling.LANCZOS)
+        image = image.filter(ImageFilter.GaussianBlur(radius=0.5))
+        arrays.append(np.asarray(image, dtype=np.float32) / 255.0)
+    return structural_similarity(arrays[0], arrays[1])
 
 
 def image_metrics(source_path: Path, output_path: Path, canvas_metadata: Mapping[str, object] | None = None) -> dict[str, object]:
@@ -76,6 +93,9 @@ def image_metrics(source_path: Path, output_path: Path, canvas_metadata: Mapping
         "pixel_mae": float(np.mean(np.abs(source - output_for_distance))),
         "luminance_mae": float(np.mean(np.abs(source_luma - distance_luma))),
         "ssim": structural_similarity(source_luma, distance_luma),
+        "perceptual_geometry_ssim": perceptual_geometry_ssim(
+            source_luma, distance_luma
+        ),
         "content_ssim": structural_similarity(source_luma, distance_luma),
         "canvas_fraction": float(metadata.get("canvas_fraction", 0.0)),
         "foreground_scale_ratio": float(metadata.get("foreground_scale_ratio", 1.0)),

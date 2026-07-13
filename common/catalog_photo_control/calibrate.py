@@ -50,7 +50,7 @@ COARSE_VALUES = {
 FAMILY_THRESHOLDS = {
     "rotation": {"perceptible": 0.6, "strong": 1.8},
     "crop": {"perceptible": 0.006, "strong": 0.025},
-    "zoom": {"perceptible": 0.008, "strong": 0.03},
+    "zoom": {"perceptible": 0.006, "strong": 0.03},
     "dezoom": {"perceptible": 0.01, "strong": 0.05},
     "offset": {"perceptible": 0.006, "strong": 0.02},
     "rotation_crop_compensated": {"perceptible": 0.32, "strong": 0.82},
