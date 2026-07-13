@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS recipes (
     recipe_id INTEGER PRIMARY KEY,
     recipe_hash TEXT NOT NULL UNIQUE,
     parameters_json TEXT NOT NULL,
+    recipe_family TEXT NOT NULL DEFAULT 'appearance_only',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS recipe_tests (
@@ -70,6 +71,7 @@ CREATE TABLE IF NOT EXISTS recipe_tests (
     listing_id TEXT NOT NULL REFERENCES source_listings(listing_id),
     source_set_hash TEXT NOT NULL,
     recipe_id INTEGER NOT NULL REFERENCES recipes(recipe_id),
+    recipe_family TEXT NOT NULL DEFAULT 'appearance_only',
     complete INTEGER NOT NULL CHECK(complete IN (0, 1)),
     quality_valid INTEGER NOT NULL CHECK(quality_valid IN (0, 1)),
     eligible INTEGER NOT NULL CHECK(eligible IN (0, 1)),
@@ -160,6 +162,29 @@ class BenchDatabase:
             columns = {row[1] for row in self.connection.execute(f"PRAGMA table_info({table})")}
             if column not in columns:
                 self.connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT NOT NULL DEFAULT 'legacy'")
+        family_columns_added = False
+        for table in ("recipes", "recipe_tests"):
+            columns = {row[1] for row in self.connection.execute(f"PRAGMA table_info({table})")}
+            if "recipe_family" not in columns:
+                self.connection.execute(
+                    f"ALTER TABLE {table} ADD COLUMN recipe_family TEXT NOT NULL DEFAULT 'appearance_only'"
+                )
+                family_columns_added = True
+        from .recipe_schema import classify_recipe_family
+
+        if family_columns_added:
+            for row in self.connection.execute(
+                "SELECT recipe_id, parameters_json FROM recipes"
+            ).fetchall():
+                family = classify_recipe_family(json.loads(row["parameters_json"]))
+                self.connection.execute(
+                    "UPDATE recipes SET recipe_family=? WHERE recipe_id=?",
+                    (family, row["recipe_id"]),
+                )
+                self.connection.execute(
+                    "UPDATE recipe_tests SET recipe_family=? WHERE recipe_id=?",
+                    (family, row["recipe_id"]),
+                )
         self.connection.commit()
 
     @contextmanager
@@ -245,10 +270,17 @@ class BenchDatabase:
             )
 
     def recipe_id(self, recipe: Recipe) -> int:
+        from .recipe_schema import classify_recipe_family
+
+        family = classify_recipe_family(recipe.parameters)
         with self.transaction() as connection:
             connection.execute(
-                "INSERT OR IGNORE INTO recipes(recipe_hash, parameters_json) VALUES (?, ?)",
-                (recipe.recipe_hash, canonical_json(recipe.parameters)),
+                "INSERT OR IGNORE INTO recipes(recipe_hash, parameters_json, recipe_family) VALUES (?, ?, ?)",
+                (recipe.recipe_hash, canonical_json(recipe.parameters), family),
+            )
+            connection.execute(
+                "UPDATE recipes SET recipe_family=? WHERE recipe_hash=?",
+                (family, recipe.recipe_hash),
             )
             row = connection.execute(
                 "SELECT recipe_id FROM recipes WHERE recipe_hash=?", (recipe.recipe_hash,)
@@ -278,17 +310,21 @@ class BenchDatabase:
         evaluation_config_hash: str = "legacy",
     ) -> int:
         recipe_id = self.recipe_id(test.recipe)
+        from .recipe_schema import classify_recipe_family
+
+        family = classify_recipe_family(test.recipe.parameters)
         with self.transaction() as connection:
             cursor = connection.execute(
                 """INSERT INTO recipe_tests
-                   (listing_id, source_set_hash, recipe_id, complete, quality_valid,
+                   (listing_id, source_set_hash, recipe_id, recipe_family, complete, quality_valid,
                     eligible, aggregate_metrics_json, error_text, retained_output_dir,
                     context_key, evaluation_config_hash)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     test.listing_id,
                     test.source_set_hash,
                     recipe_id,
+                    family,
                     int(test.complete),
                     int(test.quality_valid),
                     int(test.eligible),
@@ -381,16 +417,31 @@ class BenchDatabase:
                 for source, output in zip(listing.images, rendered.images, strict=True)
             ]
             aggregate = aggregate_metrics(metric_rows)
-            from .recipe_schema import analyze_recipe
+            from .recipe_schema import analyze_recipe, classify_recipe_family
             from .config import load_filter_space
             analysis = analyze_recipe(recipe.parameters, load_filter_space().schema.parameters)
+            recipe_family = classify_recipe_family(recipe.parameters)
             aggregate.update({
                 "active_parameter_count": float(analysis.active_parameter_count),
                 "recipe_intensity": analysis.recipe_intensity,
                 "active_parameters": list(analysis.active_parameters),
                 "canvas_mode": recipe.parameters.get("canvas_mode", "none"),
                 "canvas_mode_code": float(("none", "white", "light_gray", "sampled_background", "sampled_edge", "side_bands", "uniform_frame").index(str(recipe.parameters.get("canvas_mode", "none")))),
+                "recipe_family": recipe_family,
+                "rotation_degrees": float(recipe.parameters.get("rotation_degrees", 0.0)),
+                "crop_fraction": float(recipe.parameters.get("crop_fraction", 0.0)),
+                "zoom": float(recipe.parameters.get("zoom", 1.0)),
+                "resize_scale": float(recipe.parameters.get("resize_scale", 1.0)),
+                "offset_x": float(recipe.parameters.get("offset_x", 0.0)),
+                "offset_y": float(recipe.parameters.get("offset_y", 0.0)),
             })
+            aggregate["background_origin"] = sorted(
+                {str(row.get("background_origin", "unknown")) for row in metric_rows}
+            )
+            aggregate["background_rgb"] = [row.get("background_rgb") for row in metric_rows]
+            aggregate["sampled_background_rgb"] = [
+                row.get("sampled_background_rgb") for row in metric_rows
+            ]
             quality = evaluate_quality(metric_rows, quality_thresholds)
             aggregate["quality_score"] = quality.score
             rows = [

@@ -12,6 +12,7 @@ from typing import Mapping, Sequence
 from .diversity import Distance, listing_distance
 from .models import ListingVariant, Recipe, SourceListing
 from .recipe_learning import refresh_recipe_statistics
+from .recipe_schema import classify_recipe_family
 from .variants_db import VariantsDatabase
 
 
@@ -28,7 +29,7 @@ class CandidateImage:
 class Candidate:
     test_id: int
     recipe: Recipe
-    aggregate_metrics: Mapping[str, float]
+    aggregate_metrics: Mapping[str, object]
     images: tuple[CandidateImage, ...]
 
     @property
@@ -38,6 +39,14 @@ class Candidate:
     @property
     def distance_from_original(self) -> float:
         return float(self.aggregate_metrics.get("mean_pixel_mae", 0))
+
+    @property
+    def recipe_family(self) -> str:
+        return str(
+            self.aggregate_metrics.get(
+                "recipe_family", classify_recipe_family(self.recipe.parameters)
+            )
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,11 +60,16 @@ def select_max_min(
     candidates: Sequence[Candidate],
     count: int,
     *,
-    existing_metrics: Sequence[Mapping[str, float]] = (),
+    existing_metrics: Sequence[Mapping[str, object]] = (),
+    family_diversity_weight: float = 0.10,
 ) -> list[SelectedCandidate]:
     remaining = list(candidates)
     selected: list[SelectedCandidate] = []
     comparison_metrics = list(existing_metrics)
+    family_counts: dict[str, int] = {}
+    for metrics in comparison_metrics:
+        family = str(metrics.get("recipe_family", "appearance_only"))
+        family_counts[family] = family_counts.get(family, 0) + 1
     while remaining and len(selected) < count:
         if not comparison_metrics:
             chosen = max(
@@ -64,15 +78,19 @@ def select_max_min(
             )
             selection = SelectedCandidate(chosen, None, {})
         else:
-            scored: list[tuple[float, float, str, Candidate, Distance]] = []
+            scored: list[tuple[float, float, float, str, Candidate, Distance]] = []
             for candidate in remaining:
                 distances = [
                     listing_distance(candidate.aggregate_metrics, metrics)
                     for metrics in comparison_metrics
                 ]
                 nearest = min(distances, key=lambda distance: distance.total)
+                family_bonus = family_diversity_weight / (
+                    1 + family_counts.get(candidate.recipe_family, 0)
+                )
                 scored.append(
                     (
+                        nearest.total + family_bonus,
                         nearest.total,
                         candidate.quality_score,
                         candidate.recipe.recipe_hash,
@@ -80,10 +98,11 @@ def select_max_min(
                         nearest,
                     )
                 )
-            _, _, _, chosen, nearest = max(scored, key=lambda item: item[:3])
+            _, _, _, _, chosen, nearest = max(scored, key=lambda item: item[:4])
             selection = SelectedCandidate(chosen, nearest.total, nearest.components)
         selected.append(selection)
         comparison_metrics.append(chosen.aggregate_metrics)
+        family_counts[chosen.recipe_family] = family_counts.get(chosen.recipe_family, 0) + 1
         remaining.remove(chosen)
     return selected
 
@@ -216,6 +235,7 @@ def select_and_persist(
                 distance_from_original=selection.candidate.distance_from_original,
                 minimum_selected_distance=selection.minimum_distance,
                 minimum_distance_components=selection.distance_components,
+                recipe_family=selection.candidate.recipe_family,
             )
             image_rows = [
                 {

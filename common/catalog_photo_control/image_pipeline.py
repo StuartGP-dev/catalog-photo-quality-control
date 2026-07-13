@@ -71,7 +71,11 @@ def detect_background_color(image: Image.Image, edge_fraction: float = 0.08, sat
     return color, confidence, False
 
 
-def _geometry(image: Image.Image, parameters: dict[str, object]) -> Image.Image:
+def _geometry(
+    image: Image.Image,
+    parameters: dict[str, object],
+    fill_color: tuple[int, int, int],
+) -> tuple[Image.Image, tuple[int, int], float]:
     width, height = image.size
     crop_fraction = float(parameters["crop_fraction"])
     if crop_fraction > 0:
@@ -89,27 +93,25 @@ def _geometry(image: Image.Image, parameters: dict[str, object]) -> Image.Image:
         )
         left = round((scaled.width - width) / 2 - offset_x * width)
         top = round((scaled.height - height) / 2 - offset_y * height)
-        if scaled.width >= width and scaled.height >= height:
-            image = scaled.crop((left, top, left + width, top + height))
-        else:
-            canvas = Image.new("RGB", (width, height), _sample_background(image))
-            canvas.paste(scaled, ((width - scaled.width) // 2, (height - scaled.height) // 2))
-            image = canvas
+        canvas = Image.new("RGB", (width, height), fill_color)
+        canvas.paste(scaled, (-left, -top))
+        image = canvas
     angle = float(parameters["rotation_degrees"])
     if angle:
         image = image.rotate(
             angle,
             resample=Image.Resampling.BICUBIC,
             expand=False,
-            fillcolor=_sample_background(image),
+            fillcolor=fill_color,
         )
     scale = float(parameters["resize_scale"])
+    pre_resize_size = image.size
     if scale != 1:
         image = image.resize(
             (max(1, round(image.width * scale)), max(1, round(image.height * scale))),
             Image.Resampling.LANCZOS,
         )
-    return image
+    return image, pre_resize_size, scale
 
 
 def apply_recipe(image: Image.Image, recipe: Recipe, *, dimension_salt: int = 0) -> Image.Image:
@@ -149,7 +151,14 @@ def apply_recipe(image: Image.Image, recipe: Recipe, *, dimension_salt: int = 0)
                 for channel, gain in zip(result.split(), gains, strict=True)
             ),
         )
-    result = _geometry(result, p)
+    detected, confidence, fallback = detect_background_color(
+        result,
+        float(p["sampled_edge_fraction"]),
+        float(p["sampled_saturation_limit"]),
+        float(p["sampled_lightness_minimum"]),
+    )
+    geometry_fill = detected if not fallback else (246, 246, 246)
+    result, pre_resize_size, foreground_scale = _geometry(result, p, geometry_fill)
 
     blur = float(p["gaussian_blur_radius"])
     if blur:
@@ -173,22 +182,54 @@ def apply_recipe(image: Image.Image, recipe: Recipe, *, dimension_salt: int = 0)
 
     mode = str(p["canvas_mode"])
     border = int(p["border_width"])
-    detected, confidence, fallback = detect_background_color(result, float(p["sampled_edge_fraction"]), float(p["sampled_saturation_limit"]), float(p["sampled_lightness_minimum"]))
     gray = int(p["fixed_background_gray"])
     background = (255, 255, 255) if mode == "white" else (gray, gray, gray)
     origin = "fixed"
+    strength = float(p["sampled_color_strength"])
+    sampled_background = tuple(
+        round(v * strength + 255 * (1 - strength)) for v in detected
+    )
     if mode in {"sampled_background", "sampled_edge"}:
-        strength = float(p["sampled_color_strength"]); background = tuple(round(v * strength + 255 * (1 - strength)) for v in detected); origin = "fallback" if fallback else mode
+        background = sampled_background
+        origin = "fallback_light_gray" if fallback else mode
     pad_x = pad_y = 0
-    if mode == "side_bands": pad_x = max(1, round(result.width * float(p["side_band_width"]))); background = detected if not fallback else (246, 246, 246); origin = "sampled_edge" if not fallback else "fallback"
-    elif mode == "uniform_frame": pad_x = max(1, round(result.width * float(p["uniform_frame_width"]))); pad_y = max(1, round(result.height * float(p["uniform_frame_width"]))); background = detected if not fallback else (246, 246, 246); origin = "sampled_edge" if not fallback else "fallback"
-    elif mode != "none": pad_x = max(1, round(result.width * float(p["canvas_padding_x"]))); pad_y = max(1, round(result.height * float(p["canvas_padding_y"])))
+    if mode == "side_bands":
+        pad_x = max(1, round(result.width * float(p["side_band_width"])))
+        background = sampled_background
+        origin = "sampled_edge" if not fallback else "fallback_light_gray"
+    elif mode == "uniform_frame":
+        pad_x = max(1, round(result.width * float(p["uniform_frame_width"])))
+        pad_y = max(1, round(result.height * float(p["uniform_frame_width"])))
+        background = sampled_background
+        origin = "sampled_edge" if not fallback else "fallback_light_gray"
+    elif mode != "none" and foreground_scale >= 1.0:
+        pad_x = max(1, round(result.width * float(p["canvas_padding_x"])))
+        pad_y = max(1, round(result.height * float(p["canvas_padding_y"])))
     # A deterministic few-pixel signature guarantees dimensions differ from the source.
     extra_x = 1 + (int(recipe.recipe_hash[:4], 16) + dimension_salt * 7) % 17; extra_y = 1 + (int(recipe.recipe_hash[4:8], 16) + dimension_salt * 5) % 13
-    left = pad_x + extra_x // 2; top = pad_y + extra_y // 2
-    canvas = Image.new("RGB", (result.width + 2 * pad_x + extra_x, result.height + 2 * pad_y + extra_y), background)
+    if foreground_scale < 1.0:
+        if mode == "none":
+            raise ValueError("dezoom requires an active canvas mode")
+        if mode == "side_bands":
+            target_width = max(pre_resize_size[0], result.width + 2 * pad_x)
+            target_height = result.height
+        else:
+            target_width = max(pre_resize_size[0], result.width + 2 * pad_x)
+            target_height = max(pre_resize_size[1], result.height + 2 * pad_y)
+        canvas_width = target_width + extra_x
+        canvas_height = target_height + extra_y
+        left = (canvas_width - result.width) // 2
+        top = (canvas_height - result.height) // 2
+        pad_x = left
+        pad_y = top
+    else:
+        canvas_width = result.width + 2 * pad_x + extra_x
+        canvas_height = result.height + 2 * pad_y + extra_y
+        left = pad_x + extra_x // 2
+        top = pad_y + extra_y // 2
+    canvas = Image.new("RGB", (canvas_width, canvas_height), background)
     canvas.paste(result, (left, top)); content_box = (left, top, left + result.width, top + result.height); result = canvas
-    result.info["canvas_metadata"] = {"canvas_mode": mode, "background_rgb": background, "background_origin": origin if mode != "none" else "dimension_signature", "sampled_background_rgb": detected, "sampled_background_confidence": confidence, "sampled_background_fallback_used": fallback, "content_box": content_box, "canvas_fraction": 1.0 - (content_box[2]-content_box[0])*(content_box[3]-content_box[1])/(result.width*result.height), "foreground_scale_ratio": 1.0, "padding_x": pad_x, "padding_y": pad_y}
+    result.info["canvas_metadata"] = {"canvas_mode": mode, "background_rgb": background, "background_origin": origin if mode != "none" else "dimension_signature", "sampled_background_rgb": detected, "sampled_background_confidence": confidence, "sampled_background_fallback_used": fallback, "content_box": content_box, "canvas_fraction": 1.0 - (content_box[2]-content_box[0])*(content_box[3]-content_box[1])/(result.width*result.height), "foreground_scale_ratio": foreground_scale, "padding_x": pad_x, "padding_y": pad_y}
     radius = int(p["rounded_radius"])
     if radius:
         mask = Image.new("L", result.size, 0)

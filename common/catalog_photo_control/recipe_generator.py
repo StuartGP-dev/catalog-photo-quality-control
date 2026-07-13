@@ -37,13 +37,78 @@ class RecipeGenerator:
             if int(spec.default) not in candidates:
                 candidates.append(int(spec.default))
             return self.random.choice(candidates)
+        low = spec.active_minimum if spec.active_minimum is not None else spec.minimum
+        high = spec.active_maximum if spec.active_maximum is not None else spec.maximum
+        mode = min(high, max(low, spec.default))
         if spec.distribution == "triangular":
-            value = self.random.triangular(spec.minimum, spec.maximum, spec.default)
+            value = self.random.triangular(low, high, mode)
         else:
-            value = self.random.uniform(spec.minimum, spec.maximum)
+            value = self.random.uniform(low, high)
         return round(value) if spec.kind == "int" else value
 
+    def _defaults(self) -> dict[str, object]:
+        return {name: spec.default for name, spec in self.schema.parameters.items()}
+
+    def _between(self, name: str, low: float, high: float, mode: float | None = None) -> float:
+        spec = self.schema.parameters[name]
+        assert spec.minimum is not None and spec.maximum is not None
+        low = max(float(spec.minimum), low)
+        high = min(float(spec.maximum), high)
+        return self.random.triangular(low, high, mode if mode is not None else (low + high) / 2)
+
+    def _geometry_template(self) -> Recipe:
+        templates = (
+            "crop", "crop", "rotation", "rotation_crop", "rotation_crop_zoom",
+            "zoom_offset_x", "zoom_offset_y",
+            "zoom_offsets", "crop_offsets", "dezoom_canvas", "dezoom_bands",
+            "dezoom_frame", "rotation_dezoom_canvas", "rotation_dezoom_offset",
+            "dezoom_sampled",
+        )
+        for _ in range(100):
+            values = self._defaults()
+            template = self.random.choice(templates)
+            rotation = self._between("rotation_degrees", -1.2, 1.2, 0.0)
+            if abs(rotation) < 0.18:
+                rotation = 0.18 if rotation >= 0 else -0.18
+            crop = self._between(
+                "crop_fraction", 0.003, 0.006 if template == "crop" else 0.012, 0.004
+            )
+            zoom = self._between("zoom", 1.005, 1.018, 1.008)
+            offset_x = self._between("offset_x", -0.014, 0.014, 0.0)
+            offset_y = self._between("offset_y", -0.014, 0.014, 0.0)
+            dezoom = self._between("resize_scale", 0.972, 0.995, 0.988)
+            if template.startswith("rotation"):
+                values["rotation_degrees"] = rotation
+            if "crop" in template:
+                values["crop_fraction"] = crop
+            if "zoom" in template and "dezoom" not in template:
+                values["zoom"] = zoom
+            if template in {"zoom_offset_x", "zoom_offsets", "crop_offsets"}:
+                values["offset_x"] = offset_x
+            if template in {"zoom_offset_y", "zoom_offsets", "crop_offsets", "rotation_dezoom_offset"}:
+                values["offset_y"] = offset_y
+            if "dezoom" in template:
+                values["resize_scale"] = dezoom
+                values["canvas_mode"] = self.random.choice(
+                    ["white", "light_gray", "sampled_background", "sampled_edge"]
+                )
+            if template == "dezoom_bands":
+                values["canvas_mode"] = "side_bands"
+                values["side_band_width"] = self._between("side_band_width", 0.006, 0.025, 0.012)
+            elif template == "dezoom_frame":
+                values["canvas_mode"] = "uniform_frame"
+                values["uniform_frame_width"] = self._between("uniform_frame_width", 0.004, 0.014, 0.007)
+            elif template == "dezoom_sampled":
+                values["canvas_mode"] = "sampled_background"
+            try:
+                return self.schema.canonicalize(values)
+            except ValueError:
+                continue
+        return self.schema.canonicalize({})
+
     def random_recipe(self) -> Recipe:
+        if self.random.random() < self.schema.geometry_template_probability:
+            return self._geometry_template()
         for _ in range(100):
             values = {}
             for name, spec in self.schema.parameters.items():

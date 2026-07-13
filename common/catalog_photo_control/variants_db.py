@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Mapping, Sequence
 
 from .models import ListingVariant, SourceListing, canonical_json
+from .recipe_schema import classify_recipe_family
 
 
 SCHEMA = """
@@ -31,6 +33,7 @@ CREATE TABLE IF NOT EXISTS listing_variants (
     source_set_hash TEXT NOT NULL,
     recipe_hash TEXT NOT NULL,
     recipe_json TEXT NOT NULL,
+    recipe_family TEXT NOT NULL DEFAULT 'appearance_only',
     bench_test_id INTEGER,
     selected_rank INTEGER NOT NULL CHECK(selected_rank > 0),
     expected_image_count INTEGER NOT NULL CHECK(expected_image_count > 0),
@@ -124,6 +127,18 @@ class VariantsDatabase:
         for column in ("output_width", "output_height"):
             if column not in columns:
                 self.connection.execute(f"ALTER TABLE listing_variant_images ADD COLUMN {column} INTEGER NOT NULL DEFAULT 1")
+        variant_columns = {row[1] for row in self.connection.execute("PRAGMA table_info(listing_variants)")}
+        if "recipe_family" not in variant_columns:
+            self.connection.execute(
+                "ALTER TABLE listing_variants ADD COLUMN recipe_family TEXT NOT NULL DEFAULT 'appearance_only'"
+            )
+            for row in self.connection.execute(
+                "SELECT variant_id, recipe_json FROM listing_variants"
+            ).fetchall():
+                self.connection.execute(
+                    "UPDATE listing_variants SET recipe_family=? WHERE variant_id=?",
+                    (classify_recipe_family(json.loads(row["recipe_json"])), row["variant_id"]),
+                )
         self.connection.commit()
 
     @contextmanager
@@ -189,18 +204,19 @@ class VariantsDatabase:
                     raise ValueError("duplicate output pixel dimensions for source image")
             cursor = connection.execute(
                 """INSERT INTO listing_variants
-                   (listing_id, source_set_hash, recipe_hash, recipe_json,
+                   (listing_id, source_set_hash, recipe_hash, recipe_json, recipe_family,
                     bench_test_id, selected_rank, expected_image_count, title_text,
                     description_text, price_cents, currency, metadata_json,
                     metadata_status, aggregate_metrics_json, quality_score,
                     distance_from_original, minimum_selected_distance,
                     minimum_distance_components_json)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     variant.listing_id,
                     variant.source_set_hash,
                     variant.recipe.recipe_hash,
                     canonical_json(variant.recipe.parameters),
+                    variant.recipe_family,
                     variant.bench_test_id,
                     variant.selected_rank,
                     len(image_rows),

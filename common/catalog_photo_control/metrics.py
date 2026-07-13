@@ -112,6 +112,12 @@ def metric_distance(
         "mean_sharpness_ratio": 2.0,
         "canvas_mode_code": 6.0,
         "mean_canvas_fraction": 0.08,
+        "rotation_degrees": 2.4,
+        "crop_fraction": 0.02,
+        "zoom": 0.025,
+        "resize_scale": 0.035,
+        "offset_x": 0.04,
+        "offset_y": 0.04,
     }
     components = {
         key: abs(float(left.get(key, 0)) - float(right.get(key, 0))) / scale

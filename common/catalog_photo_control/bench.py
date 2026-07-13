@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import sys
 import time
@@ -13,6 +14,7 @@ from .config import load_filter_space
 from .html_report import write_html_report
 from .paths import LocalPaths
 from .recipe_generator import RecipeGenerator
+from .recipe_schema import classify_recipe_family
 from .recipe_learning import listing_context_key, proven_recipes
 from .selector import load_eligible_candidates, select_and_persist
 from .source_loader import load_source_listing, resolve_listing_reference
@@ -154,10 +156,16 @@ def run_benchmark(args: argparse.Namespace) -> tuple[str, Path, dict[str, int]]:
                     force=False,
                 )
                 counters["tested"] += 1
+                recipe_family = classify_recipe_family(proposal.recipe.parameters)
+                family_tested_key = f"family_tested_{recipe_family}"
+                counters[family_tested_key] = counters.get(family_tested_key, 0) + 1
                 canvas_active = proposal.recipe.parameters.get("canvas_mode", "none") != "none"
                 counters["canvas_tested"] = counters.get("canvas_tested", 0) + int(canvas_active)
                 counters["cached"] += int(execution.cached)
                 counters["valid"] += int(execution.complete and execution.quality_valid)
+                if execution.complete and execution.quality_valid:
+                    family_valid_key = f"family_valid_{recipe_family}"
+                    counters[family_valid_key] = counters.get(family_valid_key, 0) + 1
                 counters["canvas_valid"] = counters.get("canvas_valid", 0) + int(canvas_active and execution.quality_valid)
                 counters["rejected"] += int(not execution.quality_valid)
                 if execution.error:
@@ -195,6 +203,23 @@ def run_benchmark(args: argparse.Namespace) -> tuple[str, Path, dict[str, int]]:
         finally:
             obtained = variants.ready_count(listing.listing_id, listing.source_set_hash)
             counters["obtained"] = obtained
+            selected_rows = variants.connection.execute(
+                """SELECT recipe_family, recipe_json FROM listing_variants
+                   WHERE listing_id=? AND source_set_hash=? AND status='ready'""",
+                (listing.listing_id, listing.source_set_hash),
+            ).fetchall()
+            for row in selected_rows:
+                family_key = f"family_selected_{row['recipe_family']}"
+                counters[family_key] = counters.get(family_key, 0) + 1
+                values = json.loads(row["recipe_json"])
+                counters["variants_with_rotation"] = counters.get("variants_with_rotation", 0) + int(abs(float(values.get("rotation_degrees", 0))) > 0)
+                counters["variants_with_crop"] = counters.get("variants_with_crop", 0) + int(float(values.get("crop_fraction", 0)) > 0)
+                counters["variants_with_zoom"] = counters.get("variants_with_zoom", 0) + int(float(values.get("zoom", 1)) > 1)
+                dezoom = float(values.get("resize_scale", 1)) < 1
+                counters["variants_with_dezoom"] = counters.get("variants_with_dezoom", 0) + int(dezoom)
+                if dezoom:
+                    mode_key = f"dezoom_canvas_{values.get('canvas_mode', 'none')}"
+                    counters[mode_key] = counters.get(mode_key, 0) + 1
             _cleanup_work(bench, run_work)
             bench.finish_run(run_id, status, stop_reason, _utc_now(), counters)
             report = write_html_report(

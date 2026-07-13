@@ -27,6 +27,8 @@ class ParameterSpec:
     activation_probability: float
     distribution: str
     choices: tuple[str, ...] = ()
+    active_minimum: float | int | None = None
+    active_maximum: float | int | None = None
 
     @classmethod
     def from_mapping(cls, name: str, raw: Mapping[str, Any]) -> "ParameterSpec":
@@ -47,6 +49,8 @@ class ParameterSpec:
         maximum = raw.get("max")
         choices = tuple(raw.get("choices", ()))
         default = raw.get("default")
+        active_minimum = raw.get("active_min")
+        active_maximum = raw.get("active_max")
         if kind in {"float", "int"}:
             if not isinstance(minimum, (int, float)) or not isinstance(
                 maximum, (int, float)
@@ -56,6 +60,18 @@ class ParameterSpec:
                 raise ValueError(f"{name}: min exceeds max")
             if not isinstance(default, (int, float)) or not minimum <= default <= maximum:
                 raise ValueError(f"{name}: default is outside configured range")
+            if active_minimum is not None and (
+                not isinstance(active_minimum, (int, float))
+                or not minimum <= active_minimum <= maximum
+            ):
+                raise ValueError(f"{name}: active_min is outside configured range")
+            if active_maximum is not None and (
+                not isinstance(active_maximum, (int, float))
+                or not minimum <= active_maximum <= maximum
+            ):
+                raise ValueError(f"{name}: active_max is outside configured range")
+            if active_minimum is not None and active_maximum is not None and active_minimum > active_maximum:
+                raise ValueError(f"{name}: active_min exceeds active_max")
         elif not choices or default not in choices:
             raise ValueError(f"{name}: choice default must occur in choices")
         return cls(
@@ -68,6 +84,8 @@ class ParameterSpec:
             float(probability),
             distribution,
             choices,
+            active_minimum,
+            active_maximum,
         )
 
     def normalize(self, value: Any) -> Any:
@@ -92,6 +110,7 @@ class RecipeSchema:
     compatibility_rules: tuple[Mapping[str, Any], ...]
     maximum_active_parameters: int
     maximum_recipe_intensity: float
+    geometry_template_probability: float
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> "RecipeSchema":
@@ -113,7 +132,10 @@ class RecipeSchema:
             tuple(rules),
             int(quality.get("maximum_active_parameters", 4)),
             float(quality.get("maximum_recipe_intensity", 1.35)),
+            float(raw.get("geometry_template_probability", 0.0)),
         )
+        if not 0 <= schema.geometry_template_probability <= 1:
+            raise ValueError("geometry_template_probability must be between 0 and 1")
         schema.canonicalize({})
         return schema
 
@@ -152,6 +174,43 @@ class RecipeSchema:
                     raise ValueError(rule.get("message", "compatibility requirement failed"))
                 if isinstance(forbid, Mapping) and self._matches(forbid, values):
                     raise ValueError(rule.get("message", "forbidden parameter combination"))
+
+
+GEOMETRY_PARAMETERS = (
+    "rotation_degrees",
+    "crop_fraction",
+    "zoom",
+    "resize_scale",
+    "offset_x",
+    "offset_y",
+)
+
+
+def classify_recipe_family(values: Mapping[str, Any]) -> str:
+    """Return the deterministic, user-facing geometric family of a recipe.
+
+    Offsets are treated as companions of zoom and dezoom. Rotation with its
+    compensating crop remains a rotation recipe; genuinely cross-family mixes
+    are classified as mixed geometry.
+    """
+    rotation = abs(float(values.get("rotation_degrees", 0.0))) > 1e-12
+    crop = float(values.get("crop_fraction", 0.0)) > 0
+    zoom = float(values.get("zoom", 1.0)) > 1.0
+    dezoom = float(values.get("resize_scale", 1.0)) < 1.0
+    offset = abs(float(values.get("offset_x", 0.0))) > 1e-12 or abs(
+        float(values.get("offset_y", 0.0))
+    ) > 1e-12
+    if dezoom:
+        return "mixed_geometry_family" if (crop or zoom) else "dezoom_canvas_family"
+    if rotation:
+        return "mixed_geometry_family" if (zoom or offset) else "rotation_family"
+    if zoom:
+        return "zoom_family"
+    if crop:
+        return "mixed_geometry_family" if offset else "crop_family"
+    if offset:
+        return "offset_family"
+    return "appearance_only"
 
 
 @dataclass(frozen=True, slots=True)

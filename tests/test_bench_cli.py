@@ -50,3 +50,11 @@ def test_cli_generates_exactly_one_html_with_all_selected_images(
     assert content.count("<article class=\"variant\">") == 2
     assert content.count("<img ") == 4
     assert "stop reason: <strong>target_reached</strong>" in content.lower()
+    assert "Recipe families tested:" in content
+    assert "Recipe families valid:" in content
+    assert "Recipe families selected:" in content
+    assert content.count("Recipe family: ") == 2
+    selected_family_total = sum(
+        value for key, value in counters.items() if key.startswith("family_selected_")
+    )
+    assert selected_family_total == counters["obtained"]
