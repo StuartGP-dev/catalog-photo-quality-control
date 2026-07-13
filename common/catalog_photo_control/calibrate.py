@@ -59,6 +59,18 @@ FAMILY_THRESHOLDS = {
     "rotation_dezoom_canvas": {"perceptible": 0.3, "strong": 0.78},
     "crop_offset": {"perceptible": 0.3, "strong": 0.8},
 }
+FAMILY_DIRECTORY_CODES = {
+    "rotation": "rot",
+    "crop": "crop",
+    "zoom": "zoom",
+    "dezoom": "dezoom",
+    "offset": "offset",
+    "rotation_crop_compensated": "rot_crop",
+    "rotation_zoom": "rot_zoom",
+    "zoom_offset": "zoom_off",
+    "rotation_dezoom_canvas": "rot_dezoom",
+    "crop_offset": "crop_off",
+}
 FAMILY_ALIASES = {
     "rotation": ("rotation",),
     "crop": ("crop",),
@@ -362,7 +374,7 @@ def _difference_assets(source_path: Path, output_path: Path, metadata: Mapping[s
 
 def _execute_spec(listing: SourceListing, spec: CalibrationSpec, examples_root: Path) -> CalibrationResult:
     recipe = calibration_recipe(spec.parameters)
-    destination = examples_root / spec.family / f"{spec.branch}-{spec.key[:12]}"
+    destination = examples_root / FAMILY_DIRECTORY_CODES[spec.family] / spec.key[:12]
     rendered_root = destination / "variant"
     if destination.exists():
         shutil.rmtree(destination)
