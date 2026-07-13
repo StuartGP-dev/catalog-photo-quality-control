@@ -17,7 +17,7 @@
     "maximum_clip_fraction": 0.035
   },
   "selection_pool_multiplier": 3,
-  "geometry_template_probability": 0.46,
+  "geometry_template_probability": 0.52,
   "parameters": {
     "brightness": {"type": "float", "enabled": true, "default": 1.0, "min": 0.97, "max": 1.03, "activation_probability": 0.32, "distribution": "triangular"},
     "contrast": {"type": "float", "enabled": true, "default": 1.0, "min": 0.96, "max": 1.04, "activation_probability": 0.32, "distribution": "triangular"},
@@ -30,7 +30,7 @@
     "equalize_blend": {"type": "float", "enabled": false, "default": 0.0, "min": 0.0, "max": 0.08, "activation_probability": 0.0, "distribution": "uniform"},
     "rotation_degrees": {"type": "float", "enabled": true, "default": 0.0, "min": -1.2, "max": 1.2, "activation_probability": 0.18, "distribution": "triangular"},
     "crop_fraction": {"type": "float", "enabled": true, "default": 0.0, "min": 0.0, "max": 0.02, "active_min": 0.003, "activation_probability": 0.14, "distribution": "uniform"},
-    "zoom": {"type": "float", "enabled": true, "default": 1.0, "min": 1.0, "max": 1.025, "active_min": 1.005, "activation_probability": 0.14, "distribution": "triangular"},
+    "zoom": {"type": "float", "enabled": true, "default": 1.0, "min": 1.0, "max": 1.025, "active_min": 1.001, "activation_probability": 0.14, "distribution": "triangular"},
     "offset_x": {"type": "float", "enabled": true, "default": 0.0, "min": -0.02, "max": 0.02, "activation_probability": 0.1, "distribution": "triangular"},
     "offset_y": {"type": "float", "enabled": true, "default": 0.0, "min": -0.02, "max": 0.02, "activation_probability": 0.1, "distribution": "triangular"},
     "resize_scale": {"type": "float", "enabled": true, "default": 1.0, "min": 0.965, "max": 1.0, "active_max": 0.995, "activation_probability": 0.12, "distribution": "triangular"},

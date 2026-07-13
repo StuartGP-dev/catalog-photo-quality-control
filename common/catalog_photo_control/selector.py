@@ -48,6 +48,16 @@ class Candidate:
             )
         )
 
+    @property
+    def output_dimensions(self) -> frozenset[tuple[int, int]]:
+        return frozenset(
+            (
+                int(image.metrics.get("output_width", 0)),
+                int(image.metrics.get("output_height", 0)),
+            )
+            for image in self.images
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class SelectedCandidate:
@@ -61,7 +71,8 @@ def select_max_min(
     count: int,
     *,
     existing_metrics: Sequence[Mapping[str, object]] = (),
-    family_diversity_weight: float = 0.10,
+    family_diversity_weight: float = 0.15,
+    family_representation_penalty: float = 0.25,
 ) -> list[SelectedCandidate]:
     remaining = list(candidates)
     selected: list[SelectedCandidate] = []
@@ -88,9 +99,14 @@ def select_max_min(
                 family_bonus = family_diversity_weight / (
                     1 + family_counts.get(candidate.recipe_family, 0)
                 )
+                family_share = family_counts.get(candidate.recipe_family, 0) / max(
+                    1, len(comparison_metrics)
+                )
                 scored.append(
                     (
-                        nearest.total + family_bonus,
+                        nearest.total
+                        + family_bonus
+                        - family_representation_penalty * family_share,
                         nearest.total,
                         candidate.quality_score,
                         candidate.recipe.recipe_hash,
@@ -104,6 +120,13 @@ def select_max_min(
         comparison_metrics.append(chosen.aggregate_metrics)
         family_counts[chosen.recipe_family] = family_counts.get(chosen.recipe_family, 0) + 1
         remaining.remove(chosen)
+        chosen_dimensions = chosen.output_dimensions
+        if chosen_dimensions:
+            remaining = [
+                candidate
+                for candidate in remaining
+                if candidate.output_dimensions.isdisjoint(chosen_dimensions)
+            ]
     return selected
 
 
@@ -199,9 +222,9 @@ def select_and_persist(
     }
     unique_candidates: list[Candidate] = []
     for candidate in candidates:
-        dimensions = {(int(image.metrics.get("output_width", 0)), int(image.metrics.get("output_height", 0))) for image in candidate.images}
+        dimensions = candidate.output_dimensions
         if len(dimensions) == len(candidate.images) and dimensions.isdisjoint(seen_dimensions):
-            seen_dimensions.update(dimensions); unique_candidates.append(candidate)
+            unique_candidates.append(candidate)
     candidates = unique_candidates
     selections = select_max_min(candidates, needed, existing_metrics=existing_metrics)
     root = Path(selected_root).resolve()

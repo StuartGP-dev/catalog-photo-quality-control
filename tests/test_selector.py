@@ -5,7 +5,7 @@ from pathlib import Path
 from common.catalog_photo_control.bench_db import BenchDatabase
 from common.catalog_photo_control.config import load_filter_space
 from common.catalog_photo_control.models import Recipe
-from common.catalog_photo_control.selector import Candidate, select_and_persist, select_max_min
+from common.catalog_photo_control.selector import Candidate, CandidateImage, select_and_persist, select_max_min
 from common.catalog_photo_control.source_loader import load_source_listing
 from common.catalog_photo_control.variants_db import VariantsDatabase
 
@@ -31,6 +31,27 @@ def test_max_min_starts_with_quality_then_chooses_diversity() -> None:
     assert [item.candidate.test_id for item in selected] == [1, 3]
     assert selected[1].minimum_distance is not None
     assert "mean_brightness" in selected[1].distance_components
+
+
+def test_max_min_excludes_dimensions_only_after_selection(tmp_path: Path) -> None:
+    def with_dimensions(index: int, width: int) -> Candidate:
+        return Candidate(
+            index,
+            Recipe.from_parameters({"identity": index}),
+            {"quality_score": 1 - index / 100, "mean_brightness": index / 10},
+            (
+                CandidateImage(
+                    0, "source", tmp_path / str(index), "output",
+                    {"output_width": width, "output_height": 100},
+                ),
+            ),
+        )
+
+    first = with_dimensions(1, 101)
+    collision = with_dimensions(2, 101)
+    distinct = with_dimensions(3, 103)
+    selected = select_max_min([first, collision, distinct], 3)
+    assert [item.candidate.test_id for item in selected] == [1, 3]
 
 
 def test_complete_selection_resumes_and_stops_at_target(

@@ -58,7 +58,7 @@ class RecipeGenerator:
 
     def _geometry_template(self) -> Recipe:
         templates = (
-            "crop", "crop", "rotation", "rotation_crop", "rotation_crop_zoom",
+            "crop", "crop", "rotation", "zoom", "zoom", "rotation_crop", "rotation_crop_zoom",
             "zoom_offset_x", "zoom_offset_y",
             "zoom_offsets", "crop_offsets", "dezoom_canvas", "dezoom_bands",
             "dezoom_frame", "rotation_dezoom_canvas", "rotation_dezoom_offset",
@@ -73,9 +73,11 @@ class RecipeGenerator:
             crop = self._between(
                 "crop_fraction", 0.003, 0.006 if template == "crop" else 0.012, 0.004
             )
-            zoom = self._between("zoom", 1.005, 1.018, 1.008)
-            offset_x = self._between("offset_x", -0.014, 0.014, 0.0)
-            offset_y = self._between("offset_y", -0.014, 0.014, 0.0)
+            zoom = self._between(
+                "zoom", 1.001, 1.004 if template == "zoom" else 1.008, 1.003
+            )
+            offset_x = self._between("offset_x", -0.007, 0.007, 0.0)
+            offset_y = self._between("offset_y", -0.007, 0.007, 0.0)
             dezoom = self._between("resize_scale", 0.972, 0.995, 0.988)
             if template.startswith("rotation"):
                 values["rotation_degrees"] = rotation
