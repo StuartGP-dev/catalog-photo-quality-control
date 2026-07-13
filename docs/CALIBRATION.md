@@ -1,0 +1,57 @@
+# Calibration visuelle géométrique
+
+La calibration est une voie d’inspection séparée du benchmark de production.
+Elle explore des transformations géométriques plus larges sur toutes les images
+d’une annonce, sans écrire dans `catalog_variants.sqlite3` et sans modifier les
+sources.
+
+```powershell
+python -m common.catalog_photo_control.calibrate `
+  --listing "C:\catalogue\bijoux\O\O18" `
+  --families rotation,crop,zoom,dezoom,offset,geometry-combinations `
+  --output-root "local/calibration_runs" `
+  --coarse-steps 6 `
+  --bisection-steps 4
+```
+
+Chaque paramètre non étudié conserve sa valeur neutre. Une famille est d’abord
+échantillonnée sur des paliers fixes, puis les intervalles entre
+`very_subtle` et le premier candidat perceptible sont affinés de façon
+déterministe. Rotation et offsets couvrent les deux directions. Chaque dézoom
+utilise obligatoirement l’un des canevas clairs ou échantillonnés pris en charge.
+Les combinaisons restent bornées à quatre paramètres actifs.
+
+Les artefacts sont placés sous
+`local/calibration_runs/<listing>/<source-hash>-<config-hash>/` :
+
+- `index.html` est l’unique rapport utilisateur ;
+- `manifest.json` porte les hashes, les compteurs et le résumé par famille ;
+- `calibration_results.json` conserve les métriques exhaustives par exemple et
+  par image ;
+- `examples/` contient les variantes et outils d’inspection.
+
+Une seconde exécution avec les mêmes sources et la même configuration réutilise
+le run existant. `--force` le reconstruit. Aucune base du catalogue final n’est
+ouverte par cette commande.
+
+## Lecture du rapport
+
+Le rapport affiche les cinq images dans l’ordre source avec comparaison
+côte-à-côte/superposée, alternance, curseur avant/après, zoom 100 %, carte de
+différence amplifiée, crops central et de bords et boîte du contenu. Pour les
+canevas, il donne la couleur détectée, la couleur réellement utilisée, son
+origine, la confiance, le fallback, la fraction de canevas et l’échelle du
+premier plan.
+
+Les classes automatiques sont des aides à la revue :
+
+- `very_subtle` : sous le début géométrique estimé de la zone perceptible ;
+- `perceptible_candidate` : changement mesurable dans la zone à inspecter ;
+- `strong_candidate` : changement fort encore techniquement valide ;
+- `rejected` : au moins une barrière exploratoire ou de conservation échoue.
+
+Les barrières exploratoires sont SSIM ≥ 0,94, pixel MAE ≤ 0,04, luminance MAE
+≤ 0,035, ratio de netteté entre 0,7 et 1,6 et clipping ≤ 0,02. Elles ne sont pas
+des seuils de production. Aucune métrique ne prouve seule qu’un changement est
+perçu ou naturel : la décision finale exige l’inspection visuelle de toutes les
+images réelles.

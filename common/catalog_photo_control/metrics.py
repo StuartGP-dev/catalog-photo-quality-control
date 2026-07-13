@@ -82,7 +82,7 @@ def image_metrics(source_path: Path, output_path: Path, canvas_metadata: Mapping
         "output_width": float(output.shape[1]),
         "output_height": float(output.shape[0]),
     }
-    metrics.update({key: metadata[key] for key in ("sampled_background_rgb", "sampled_background_confidence", "sampled_background_fallback_used", "background_rgb", "background_origin", "canvas_mode") if key in metadata})
+    metrics.update({key: metadata[key] for key in ("detected_background_rgb", "sampled_background_rgb", "sampled_background_confidence", "sampled_background_fallback_used", "fallback_origin", "background_rgb", "background_origin", "canvas_mode") if key in metadata})
     return metrics
 
 

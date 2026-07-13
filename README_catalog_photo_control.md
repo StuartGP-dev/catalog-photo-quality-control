@@ -55,6 +55,25 @@ restante avant d’appliquer le max-min. Ce multiplicateur est configurable via
 `selection_pool_multiplier` dans le même fichier. Si une limite d’arrêt survient
 avant, le pool valide disponible est tout de même sélectionné.
 
+## Calibration visuelle
+
+La commande séparée de calibration explore des paliers géométriques plus larges
+sans alimenter la base finale des variants :
+
+```powershell
+python -m common.catalog_photo_control.calibrate `
+  --listing "C:\catalogue\bijoux\O\O18" `
+  --families rotation,crop,zoom,dezoom,offset,geometry-combinations `
+  --output-root "local/calibration_runs" `
+  --coarse-steps 6 `
+  --bisection-steps 4
+```
+
+Elle produit un seul `index.html`, accompagné de données JSON et d’outils
+d’inspection sous `local/calibration_runs`. Les métriques ne sont que des aides
+au choix : la validation visuelle de toutes les images reste obligatoire. Voir
+[`docs/CALIBRATION.md`](docs/CALIBRATION.md).
+
 ## Sorties
 
 ```text
