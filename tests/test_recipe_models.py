@@ -53,6 +53,14 @@ def test_unknown_and_incompatible_settings_fail_early() -> None:
         )
     with pytest.raises(ValueError, match="disabled"):
         schema.canonicalize({"rounded_radius": 10, "canvas_padding_x": 0.01})
+    with pytest.raises(ValueError, match="active value is below"):
+        schema.canonicalize({"crop_fraction": 0.001})
+    with pytest.raises(ValueError, match="active value is below"):
+        schema.canonicalize({"zoom": 1.0005})
+    with pytest.raises(ValueError, match="active value exceeds"):
+        schema.canonicalize(
+            {"resize_scale": 0.999, "canvas_mode": "sampled_background"}
+        )
 
 
 def test_source_set_hash_is_ordered_and_changes_with_source(

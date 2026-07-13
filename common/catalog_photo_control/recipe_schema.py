@@ -99,6 +99,15 @@ class ParameterSpec:
             raise ValueError(
                 f"{self.name}: {value} is outside [{self.minimum}, {self.maximum}]"
             )
+        if value != self.default:
+            if self.active_minimum is not None and value < self.active_minimum:
+                raise ValueError(
+                    f"{self.name}: active value is below {self.active_minimum}"
+                )
+            if self.active_maximum is not None and value > self.active_maximum:
+                raise ValueError(
+                    f"{self.name}: active value exceeds {self.active_maximum}"
+                )
         if not self.enabled and value != self.default:
             raise ValueError(f"{self.name}: parameter is disabled")
         return int(value) if self.kind == "int" else float(value)
