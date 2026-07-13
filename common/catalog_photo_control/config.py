@@ -8,7 +8,7 @@ from typing import Any, Mapping
 from .models import stable_hash
 from .recipe_schema import RecipeSchema
 
-METRICS_VERSION = "fidelity-v3-geometry-perceptual-ssim"
+METRICS_VERSION = "fidelity-v4-per-image-diversity-gate"
 
 
 DEFAULT_FILTER_SPACE = Path(__file__).resolve().parents[2] / "config" / "filter_space.json"
@@ -20,6 +20,7 @@ class FilterSpace:
     proposal_allocation: Mapping[str, float]
     quality_thresholds: Mapping[str, float]
     selection_pool_multiplier: int
+    diversity_gate: Mapping[str, Any]
     evaluation_config_hash: str
     raw: Mapping[str, Any]
 
@@ -47,11 +48,19 @@ def load_filter_space(path: str | Path = DEFAULT_FILTER_SPACE) -> FilterSpace:
     pool_multiplier = raw.get("selection_pool_multiplier", 3)
     if not isinstance(pool_multiplier, int) or pool_multiplier < 1:
         raise ValueError("selection_pool_multiplier must be a positive integer")
+    diversity_gate = raw.get("diversity_gate", {})
+    if not isinstance(diversity_gate, Mapping):
+        raise ValueError("diversity_gate must be an object")
+    if diversity_gate:
+        from .diversity_gate import validate_diversity_config
+
+        diversity_gate = validate_diversity_config(diversity_gate)
     return FilterSpace(
         schema,
         {str(key): float(value) for key, value in allocation.items()},
         {str(key): float(value) for key, value in thresholds.items()},
         pool_multiplier,
+        dict(diversity_gate),
         stable_hash({"filter_space": raw, "metrics_version": METRICS_VERSION}),
         raw,
     )

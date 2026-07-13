@@ -133,6 +133,7 @@ def run_benchmark(args: argparse.Namespace) -> tuple[str, Path, dict[str, int]]:
                             listing,
                             args.target_variants,
                             selected_root,
+                            space.diversity_gate,
                         )
                         counters["selected"] += len(new_ids)
                         selected_count = variants.ready_count(
@@ -154,6 +155,8 @@ def run_benchmark(args: argparse.Namespace) -> tuple[str, Path, dict[str, int]]:
                     space.quality_thresholds,
                     space.evaluation_config_hash,
                     force=False,
+                    diversity_config=space.diversity_gate,
+                    variants_connection=variants.connection,
                 )
                 counters["tested"] += 1
                 recipe_family = classify_recipe_family(proposal.recipe.parameters)
@@ -168,6 +171,9 @@ def run_benchmark(args: argparse.Namespace) -> tuple[str, Path, dict[str, int]]:
                     counters[family_valid_key] = counters.get(family_valid_key, 0) + 1
                 counters["canvas_valid"] = counters.get("canvas_valid", 0) + int(canvas_active and execution.quality_valid)
                 counters["rejected"] += int(not execution.quality_valid)
+                counters["rejected_proximity"] = counters.get("rejected_proximity", 0) + int(
+                    execution.quality_valid and not execution.eligible
+                )
                 if execution.error:
                     for reason in execution.error.split(","):
                         key = f"rejected_{reason.split(':')[-1]}"
@@ -185,6 +191,7 @@ def run_benchmark(args: argparse.Namespace) -> tuple[str, Path, dict[str, int]]:
                         listing,
                         args.target_variants,
                         selected_root,
+                        space.diversity_gate,
                     )
                     counters["selected"] += len(new_ids)
                     counters["canvas_selected"] = counters.get("canvas_selected", 0) + sum(1 for variant_id in new_ids if variants.connection.execute("SELECT recipe_json FROM listing_variants WHERE variant_id=?", (variant_id,)).fetchone()[0].find('"canvas_mode":"none"') < 0)

@@ -107,6 +107,10 @@ class ListingVariant:
     minimum_selected_distance: float | None = None
     minimum_distance_components: Mapping[str, float] = field(default_factory=dict)
     recipe_family: str = "appearance_only"
+    minimum_same_listing_distance: float | None = None
+    minimum_catalog_distance: float | None = None
+    diversity_gate_version: str = "legacy"
+    diversity_valid: bool = True
     title_text: str | None = None
     description_text: str | None = None
     price_cents: int | None = None

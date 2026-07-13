@@ -56,12 +56,18 @@ def write_html_report(
                WHERE variant_id=? ORDER BY image_index""",
             (variant["variant_id"],),
         ).fetchall()
-        image_html = "".join(
-            f'<figure><img src="{html.escape(_relative_link(image["output_path"], output.parent))}" '
-            f'alt="variant {variant["selected_rank"]}, source image {image["image_index"]}">'
-            f'<figcaption>Source #{image["image_index"]}</figcaption></figure>'
-            for image in images
-        )
+        image_parts = []
+        for image in images:
+            same = json.loads(image["nearest_same_listing_json"])
+            catalog = json.loads(image["nearest_catalog_json"])
+            image_parts.append(
+                f'<figure><img src="{html.escape(_relative_link(image["output_path"], output.parent))}" '
+                f'alt="variant {variant["selected_rank"]}, source image {image["image_index"]}">'
+                f'<figcaption>Index #{image["image_index"]}<br>intra {same.get("total_distance", "no_reference_yet")} '
+                f'({image["reference_count_same_listing"]} réf.)<br>catalogue {catalog.get("total_distance", "no_reference_yet")} '
+                f'({image["reference_count_catalog"]} réf.)</figcaption></figure>'
+            )
+        image_html = "".join(image_parts)
         recipe = html.escape(
             json.dumps(json.loads(variant["recipe_json"]), indent=2, ensure_ascii=False)
         )
@@ -78,13 +84,25 @@ def write_html_report(
             )
         )
         folder = html.escape(_relative_link(Path(images[0]["output_path"]).parent, output.parent)) if images else "#"
+        same_threshold = float(aggregate.get("minimum_same_listing_threshold", 0))
+        catalog_threshold = float(aggregate.get("minimum_catalog_threshold", 0))
+        same_minimum = variant["minimum_same_listing_distance"]
+        catalog_minimum = variant["minimum_catalog_distance"]
+        same_margin = None if same_minimum is None else float(same_minimum) - same_threshold
+        catalog_margin = None if catalog_minimum is None else float(catalog_minimum) - catalog_threshold
+        limiting = min(
+            ((json.loads(image["nearest_same_listing_json"]).get("total_distance", 2), image["image_index"], json.loads(image["nearest_same_listing_json"])) for image in images),
+            default=(None, None, {}), key=lambda item: item[0],
+        )
         cards.append(
             f"""<article class="variant">
-            <h2>Variant {variant['selected_rank']:04d}</h2>
+            <h2 data-margin="{same_margin if same_margin is not None else 9}">Variant {variant['selected_rank']:04d}</h2>
             <p><strong>Recipe family: {html.escape(variant['recipe_family'])}</strong></p>
             <p>Quality: {variant['quality_score']:.4f} · Distance from original:
             {variant['distance_from_original']:.4f} · Minimum selected distance:
             {variant['minimum_selected_distance'] if variant['minimum_selected_distance'] is not None else 'seed'}</p>
+            <p><strong>Diversité :</strong> intra {same_minimum if same_minimum is not None else 'no_reference_yet'} / seuil {same_threshold} / marge {same_margin if same_margin is not None else 'n/a'} · catalogue {catalog_minimum if catalog_minimum is not None else 'no_reference_yet'} / seuil {catalog_threshold} / marge {catalog_margin if catalog_margin is not None else 'n/a'}.</p>
+            <p>Image limitante : index {limiting[1] if limiting[1] is not None else 'n/a'} · voisin {html.escape(str(limiting[2].get('listing_id', 'n/a')))} / variant {limiting[2].get('variant_id', 'source')} · composantes {html.escape(str(limiting[2].get('components', {})))}</p>
             <p>Minimum SSIM: {aggregate.get('min_ssim', 'n/a')} · Maximum pixel MAE: {aggregate.get('max_pixel_mae', 'n/a')}
             · Maximum luminance MAE: {aggregate.get('max_luminance_mae', 'n/a')} · Maximum sharpness ratio: {aggregate.get('max_sharpness_ratio', 'n/a')}</p>
             <p>Active parameters: {aggregate.get('active_parameter_count', 0)} · Recipe intensity: {aggregate.get('recipe_intensity', 0)}
@@ -118,6 +136,8 @@ def write_html_report(
         raise ValueError("selected recipe-family counters do not match selected variants")
     selected_distribution = _format_distribution(selected_values)
     dezoom_distribution = _format_distribution(_distribution(counters, "dezoom_canvas_"))
+    same_distances = [float(row["minimum_same_listing_distance"]) for row in variants if row["minimum_same_listing_distance"] is not None]
+    distance_summary = "no_reference_yet" if not same_distances else f"min {min(same_distances):.5f} · moyenne {sum(same_distances)/len(same_distances):.5f} · médiane {sorted(same_distances)[len(same_distances)//2]:.5f} · max {max(same_distances):.5f}"
     document = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>Catalog benchmark {html.escape(run_id)}</title>
@@ -136,8 +156,10 @@ dl{{display:grid;grid-template-columns:max-content 1fr;gap:.35rem 1rem}}dt{{font
 <p>Recipe families valid: {valid_distribution}</p>
 <p>Recipe families selected: {selected_distribution}</p>
 <p>Selected geometry: rotation {counters.get('variants_with_rotation', 0)} · crop {counters.get('variants_with_crop', 0)} · zoom {counters.get('variants_with_zoom', 0)} · dezoom {counters.get('variants_with_dezoom', 0)}</p>
-<p>Dezoom canvas modes: {dezoom_distribution}</p></section>
+<p>Dezoom canvas modes: {dezoom_distribution}</p>
+<p>Diversité intra-annonce des variantes ready : {distance_summary}</p>
+<p><button onclick="filterCards('all')">Toutes</button> <button onclick="filterCards('near')">Proches du seuil</button> <button onclick="filterCards('far')">Les plus différentes</button></p></section>
 {''.join(cards) or '<p>No complete selected variant.</p>'}
-</main></body></html>"""
+<script>function filterCards(mode){{document.querySelectorAll('.variant').forEach(card=>{{const margin=Number(card.querySelector('h2').dataset.margin);card.style.display=mode==='all'||mode==='near'&&!(margin>=0.01)||mode==='far'&&margin>=0.01?'block':'none'}})}}</script></main></body></html>"""
     output.write_text(document, encoding="utf-8")
     return output

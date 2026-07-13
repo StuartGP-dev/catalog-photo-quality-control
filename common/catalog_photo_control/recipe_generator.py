@@ -76,22 +76,22 @@ class RecipeGenerator:
         for _ in range(100):
             values = self._defaults()
             template = self.random.choice(templates)
-            rotation = self._between("rotation_degrees", -1.2, 1.2, 0.0)
-            if abs(rotation) < 0.6:
-                rotation = 0.6 if rotation >= 0 else -0.6
+            rotation = self._between("rotation_degrees", -1.8, 1.8, 0.0)
+            if abs(rotation) < 0.8:
+                rotation = 0.8 if rotation >= 0 else -0.8
             crop = self._between(
-                "crop_fraction", 0.006, 0.01 if template == "crop" else 0.012, 0.007
+                "crop_fraction", 0.008, 0.018 if template == "crop" else 0.014, 0.01
             )
             zoom = self._between(
-                "zoom", 1.006, 1.012 if template == "zoom" else 1.015, 1.008
+                "zoom", 1.01, 1.026 if template == "zoom" else 1.02, 1.014
             )
-            offset_x = self._between("offset_x", -0.01, 0.01, 0.0)
-            offset_y = self._between("offset_y", -0.01, 0.01, 0.0)
-            if abs(offset_x) < 0.005:
-                offset_x = 0.005 if offset_x >= 0 else -0.005
-            if abs(offset_y) < 0.005:
-                offset_y = 0.005 if offset_y >= 0 else -0.005
-            dezoom = self._between("resize_scale", 0.97, 0.985, 0.98)
+            offset_x = self._between("offset_x", -0.016, 0.016, 0.0)
+            offset_y = self._between("offset_y", -0.016, 0.016, 0.0)
+            if abs(offset_x) < 0.008:
+                offset_x = 0.008 if offset_x >= 0 else -0.008
+            if abs(offset_y) < 0.008:
+                offset_y = 0.008 if offset_y >= 0 else -0.008
+            dezoom = self._between("resize_scale", 0.955, 0.98, 0.968)
             if template.startswith("rotation"):
                 values["rotation_degrees"] = rotation
             if "crop" in template:
@@ -109,10 +109,10 @@ class RecipeGenerator:
                 )
             if template == "dezoom_bands":
                 values["canvas_mode"] = "side_bands"
-                values["side_band_width"] = self._between("side_band_width", 0.006, 0.025, 0.012)
+                values["side_band_width"] = self._between("side_band_width", 0.012, 0.035, 0.02)
             elif template == "dezoom_frame":
                 values["canvas_mode"] = "uniform_frame"
-                values["uniform_frame_width"] = self._between("uniform_frame_width", 0.004, 0.014, 0.007)
+                values["uniform_frame_width"] = self._between("uniform_frame_width", 0.008, 0.02, 0.012)
             elif template == "dezoom_sampled":
                 values["canvas_mode"] = "sampled_background"
             try:

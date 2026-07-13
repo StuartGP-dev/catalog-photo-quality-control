@@ -49,6 +49,10 @@ CREATE TABLE IF NOT EXISTS listing_variants (
     distance_from_original REAL NOT NULL DEFAULT 0,
     minimum_selected_distance REAL,
     minimum_distance_components_json TEXT NOT NULL DEFAULT '{}',
+    minimum_same_listing_distance REAL,
+    minimum_catalog_distance REAL,
+    diversity_gate_version TEXT NOT NULL DEFAULT 'legacy',
+    diversity_valid INTEGER NOT NULL DEFAULT 1 CHECK(diversity_valid IN (0, 1)),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(listing_id, source_set_hash, recipe_hash),
     UNIQUE(listing_id, source_set_hash, selected_rank)
@@ -64,6 +68,10 @@ CREATE TABLE IF NOT EXISTS listing_variant_images (
     output_width INTEGER NOT NULL DEFAULT 1,
     output_height INTEGER NOT NULL DEFAULT 1,
     metrics_json TEXT NOT NULL,
+    nearest_same_listing_json TEXT NOT NULL DEFAULT '{}',
+    nearest_catalog_json TEXT NOT NULL DEFAULT '{}',
+    reference_count_same_listing INTEGER NOT NULL DEFAULT 0,
+    reference_count_catalog INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY(variant_id, image_index)
 );
 CREATE TRIGGER IF NOT EXISTS reject_ready_variant_insert
@@ -75,6 +83,8 @@ CREATE TRIGGER IF NOT EXISTS validate_ready_variant_update
 BEFORE UPDATE OF status ON listing_variants
 WHEN NEW.status = 'ready'
 BEGIN
+    SELECT CASE WHEN NEW.diversity_valid != 1
+    THEN RAISE(ABORT, 'variant did not pass diversity gate') END;
     SELECT CASE WHEN (
         SELECT COUNT(*) FROM listing_variant_images WHERE variant_id = NEW.variant_id
     ) != NEW.expected_image_count
@@ -139,6 +149,53 @@ class VariantsDatabase:
                     "UPDATE listing_variants SET recipe_family=? WHERE variant_id=?",
                     (classify_recipe_family(json.loads(row["recipe_json"])), row["variant_id"]),
                 )
+        additions = {
+            "listing_variants": {
+                "minimum_same_listing_distance": "REAL",
+                "minimum_catalog_distance": "REAL",
+                "diversity_gate_version": "TEXT NOT NULL DEFAULT 'legacy'",
+                "diversity_valid": "INTEGER NOT NULL DEFAULT 1",
+            },
+            "listing_variant_images": {
+                "nearest_same_listing_json": "TEXT NOT NULL DEFAULT '{}'",
+                "nearest_catalog_json": "TEXT NOT NULL DEFAULT '{}'",
+                "reference_count_same_listing": "INTEGER NOT NULL DEFAULT 0",
+                "reference_count_catalog": "INTEGER NOT NULL DEFAULT 0",
+            },
+        }
+        for table, definitions in additions.items():
+            columns = {row[1] for row in self.connection.execute(f"PRAGMA table_info({table})")}
+            for column, definition in definitions.items():
+                if column not in columns:
+                    self.connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        self.connection.execute("DROP TRIGGER IF EXISTS validate_ready_variant_update")
+        self.connection.executescript(
+            """CREATE TRIGGER validate_ready_variant_update
+            BEFORE UPDATE OF status ON listing_variants WHEN NEW.status = 'ready'
+            BEGIN
+                SELECT CASE WHEN NEW.diversity_valid != 1
+                THEN RAISE(ABORT, 'variant did not pass diversity gate') END;
+                SELECT CASE WHEN (
+                    SELECT COUNT(*) FROM listing_variant_images WHERE variant_id = NEW.variant_id
+                ) != NEW.expected_image_count
+                THEN RAISE(ABORT, 'incomplete variant') END;
+                SELECT CASE WHEN (
+                    SELECT COUNT(*) FROM listing_images
+                    WHERE listing_id = NEW.listing_id AND source_set_hash = NEW.source_set_hash
+                ) != NEW.expected_image_count
+                THEN RAISE(ABORT, 'variant does not cover active source set') END;
+                SELECT CASE WHEN EXISTS (
+                    SELECT 1 FROM listing_images source
+                    LEFT JOIN listing_variant_images output
+                      ON output.variant_id = NEW.variant_id
+                     AND output.image_index = source.image_index
+                     AND output.source_hash = source.source_hash
+                    WHERE source.listing_id = NEW.listing_id
+                      AND source.source_set_hash = NEW.source_set_hash
+                      AND output.variant_id IS NULL
+                ) THEN RAISE(ABORT, 'variant image coverage mismatch') END;
+            END;"""
+        )
         self.connection.commit()
 
     @contextmanager
@@ -209,8 +266,9 @@ class VariantsDatabase:
                     description_text, price_cents, currency, metadata_json,
                     metadata_status, aggregate_metrics_json, quality_score,
                     distance_from_original, minimum_selected_distance,
-                    minimum_distance_components_json)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    minimum_distance_components_json, minimum_same_listing_distance,
+                    minimum_catalog_distance, diversity_gate_version, diversity_valid)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     variant.listing_id,
                     variant.source_set_hash,
@@ -231,13 +289,20 @@ class VariantsDatabase:
                     variant.distance_from_original,
                     variant.minimum_selected_distance,
                     canonical_json(variant.minimum_distance_components),
+                    variant.minimum_same_listing_distance,
+                    variant.minimum_catalog_distance,
+                    variant.diversity_gate_version,
+                    int(variant.diversity_valid),
                 ),
             )
             variant_id = int(cursor.lastrowid)
             connection.executemany(
                 """INSERT INTO listing_variant_images
-                   (variant_id, image_index, source_hash, output_path, output_hash, metrics_json, output_width, output_height)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (variant_id, image_index, source_hash, output_path, output_hash,
+                    metrics_json, output_width, output_height,
+                    nearest_same_listing_json, nearest_catalog_json,
+                    reference_count_same_listing, reference_count_catalog)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
                     (
                         variant_id,
@@ -248,6 +313,10 @@ class VariantsDatabase:
                         canonical_json(row.get("metrics", {})),
                         int(row.get("output_width", row.get("metrics", {}).get("output_width", 1))),
                         int(row.get("output_height", row.get("metrics", {}).get("output_height", 1))),
+                        str(row.get("nearest_same_listing_json", "{}")),
+                        str(row.get("nearest_catalog_json", "{}")),
+                        int(row.get("reference_count_same_listing", 0)),
+                        int(row.get("reference_count_catalog", 0)),
                     )
                     for row in image_rows
                 ],

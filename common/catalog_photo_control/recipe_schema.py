@@ -140,7 +140,7 @@ class RecipeSchema:
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> "RecipeSchema":
-        if raw.get("version") not in {1, 2, 3}:
+        if raw.get("version") not in {1, 2, 3, 4}:
             raise ValueError("unsupported filter space version")
         parameter_data = raw.get("parameters")
         if not isinstance(parameter_data, Mapping) or not parameter_data:

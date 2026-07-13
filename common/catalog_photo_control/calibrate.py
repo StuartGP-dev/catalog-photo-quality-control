@@ -6,6 +6,7 @@ import json
 import math
 import os
 import shutil
+import sqlite3
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -541,6 +542,68 @@ def run_calibration(args: argparse.Namespace) -> tuple[Path, dict[str, object]]:
     return report, summary
 
 
+def run_diversity_calibration(args: argparse.Namespace) -> tuple[Path, dict[str, object]]:
+    from .diversity_analysis import (
+        analysis_summary,
+        analyze_pairs,
+        load_analysis_images,
+        nearest_pairs,
+        threshold_outcomes,
+        write_analysis_html,
+        write_analysis_json,
+    )
+    from .paths import LocalPaths
+    from .visual_distance import DISTANCE_METRICS_VERSION
+
+    listing_dir, listing_code = resolve_listing_reference(args.listing, args.source_root)
+    listing = load_source_listing(listing_dir, listing_code=listing_code)
+    database = LocalPaths.from_root(args.local_root).variants_database.resolve()
+    connection = sqlite3.connect(f"file:{database.as_posix()}?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
+    before = database.stat()
+    try:
+        images = load_analysis_images(connection, listing.listing_code)
+        if not any(image.variant_id is not None for image in images):
+            raise ValueError(f"no ready variants found for {listing.listing_code}")
+        pairs = analyze_pairs(images, args.distance_scope)
+    finally:
+        connection.close()
+    after = database.stat()
+    if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+        raise RuntimeError("read-only diversity calibration changed the variants database")
+    summary = analysis_summary(pairs)
+    thresholds = (0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06)
+    config_hash = stable_hash({
+        "version": DISTANCE_METRICS_VERSION,
+        "scope": args.distance_scope,
+        "source_set_hash": listing.source_set_hash,
+        "thresholds": thresholds,
+    })
+    root = Path(args.diversity_output_root).resolve() / listing.listing_code
+    run_dir = root / f"{listing.source_set_hash[:12]}-{config_hash[:12]}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    report = run_dir / "index.html"
+    write_analysis_html(report, pairs, summary, thresholds, args.top_nearest)
+    write_analysis_json(run_dir / "diversity_results.json", pairs, summary, thresholds)
+    manifest = {
+        "version": DISTANCE_METRICS_VERSION,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "listing": listing.listing_code,
+        "source_set_hash": listing.source_set_hash,
+        "source_hashes": [image.source_hash for image in listing.images],
+        "config_hash": config_hash,
+        "scope": args.distance_scope,
+        "pair_count": len(pairs),
+        "nearest_pair_count": len(nearest_pairs(pairs)),
+        "threshold_outcomes": threshold_outcomes(nearest_pairs(pairs), thresholds),
+        "summary": summary,
+        "html_count": len(list(run_dir.rglob("*.html"))),
+        "read_only_unchanged": True,
+    }
+    (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    return report, manifest
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Calibrate visible catalog geometry transformations without writing final variants.")
     parser.add_argument("--listing", required=True)
@@ -550,6 +613,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--coarse-steps", type=int, default=6)
     parser.add_argument("--bisection-steps", type=int, default=4)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--calibrate-diversity-gate", action="store_true")
+    parser.add_argument("--distance-scope", choices=("listing", "catalog", "both"), default="both")
+    parser.add_argument("--local-root", default="local")
+    parser.add_argument("--diversity-output-root", default="local/diversity_calibration")
+    parser.add_argument("--top-nearest", type=int, default=50)
     return parser
 
 
@@ -559,7 +627,11 @@ def main(argv: list[str] | None = None) -> int:
         print("error: step counts must be positive", file=sys.stderr)
         return 2
     try:
-        report, summary = run_calibration(args)
+        report, summary = (
+            run_diversity_calibration(args)
+            if args.calibrate_diversity_gate
+            else run_calibration(args)
+        )
     except (FileNotFoundError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

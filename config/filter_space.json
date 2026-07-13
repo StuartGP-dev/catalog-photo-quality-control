@@ -1,9 +1,9 @@
 {
-  "version": 3,
+  "version": 4,
   "proposal_allocation": {
-    "random": 0.5,
-    "proven": 0.3,
-    "mutation": 0.2
+    "random": 0.62,
+    "proven": 0.23,
+    "mutation": 0.15
   },
   "quality_thresholds": {
     "minimum_quality": 0.55,
@@ -18,7 +18,34 @@
     "maximum_clip_fraction": 0.035
   },
   "selection_pool_multiplier": 3,
-  "geometry_template_probability": 0.68,
+  "diversity_gate": {
+    "enabled": true,
+    "scope": "both",
+    "compare_same_image_index_only": true,
+    "include_ready_variants": true,
+    "include_source_images": true,
+    "minimum_same_listing_distance": 0.012,
+    "minimum_catalog_distance": 0.006,
+    "reject_complete_variant_on_single_image_failure": true,
+    "metrics_version": "image-distance-v1",
+    "nearest_neighbors_to_persist": 5,
+    "weights": {"structural": 0.3, "luminance": 0.1, "color": 0.12, "edge": 0.16, "geometry": 0.24, "canvas": 0.08},
+    "family_thresholds": {
+      "appearance_only": {"minimum_same_listing_distance": 0.01, "minimum_catalog_distance": 0.005},
+      "rotation_family": {"minimum_same_listing_distance": 0.012, "minimum_catalog_distance": 0.006},
+      "crop_family": {"minimum_same_listing_distance": 0.012, "minimum_catalog_distance": 0.006},
+      "zoom_family": {"minimum_same_listing_distance": 0.012, "minimum_catalog_distance": 0.006},
+      "dezoom_canvas_family": {"minimum_same_listing_distance": 0.014, "minimum_catalog_distance": 0.007},
+      "offset_family": {"minimum_same_listing_distance": 0.012, "minimum_catalog_distance": 0.006},
+      "mixed_geometry_family": {"minimum_same_listing_distance": 0.015, "minimum_catalog_distance": 0.0075}
+    },
+    "family_weights": {
+      "appearance_only": {"structural": 0.28, "luminance": 0.18, "color": 0.2, "edge": 0.2, "geometry": 0.1, "canvas": 0.04},
+      "dezoom_canvas_family": {"structural": 0.25, "luminance": 0.07, "color": 0.08, "edge": 0.14, "geometry": 0.28, "canvas": 0.18},
+      "mixed_geometry_family": {"structural": 0.27, "luminance": 0.07, "color": 0.08, "edge": 0.15, "geometry": 0.3, "canvas": 0.13}
+    }
+  },
+  "geometry_template_probability": 0.78,
   "parameters": {
     "brightness": {"type": "float", "enabled": true, "default": 1.0, "min": 0.97, "max": 1.03, "activation_probability": 0.32, "distribution": "triangular"},
     "contrast": {"type": "float", "enabled": true, "default": 1.0, "min": 0.96, "max": 1.04, "activation_probability": 0.32, "distribution": "triangular"},
@@ -29,12 +56,12 @@
     "tint": {"type": "float", "enabled": true, "default": 0.0, "min": -0.015, "max": 0.015, "activation_probability": 0.12, "distribution": "triangular"},
     "autocontrast_blend": {"type": "float", "enabled": true, "default": 0.0, "min": 0.0, "max": 0.08, "activation_probability": 0.08, "distribution": "uniform"},
     "equalize_blend": {"type": "float", "enabled": false, "default": 0.0, "min": 0.0, "max": 0.08, "activation_probability": 0.0, "distribution": "uniform"},
-    "rotation_degrees": {"type": "float", "enabled": true, "default": 0.0, "min": -1.2, "max": 1.2, "active_min_abs": 0.6, "activation_probability": 0.28, "distribution": "triangular"},
-    "crop_fraction": {"type": "float", "enabled": true, "default": 0.0, "min": 0.0, "max": 0.015, "active_min": 0.006, "activation_probability": 0.2, "distribution": "uniform"},
-    "zoom": {"type": "float", "enabled": true, "default": 1.0, "min": 1.0, "max": 1.02, "active_min": 1.006, "activation_probability": 0.2, "distribution": "triangular"},
-    "offset_x": {"type": "float", "enabled": true, "default": 0.0, "min": -0.012, "max": 0.012, "active_min_abs": 0.005, "activation_probability": 0.16, "distribution": "triangular"},
-    "offset_y": {"type": "float", "enabled": true, "default": 0.0, "min": -0.012, "max": 0.012, "active_min_abs": 0.005, "activation_probability": 0.16, "distribution": "triangular"},
-    "resize_scale": {"type": "float", "enabled": true, "default": 1.0, "min": 0.965, "max": 1.0, "active_max": 0.985, "activation_probability": 0.18, "distribution": "triangular"},
+    "rotation_degrees": {"type": "float", "enabled": true, "default": 0.0, "min": -1.8, "max": 1.8, "active_min_abs": 0.6, "activation_probability": 0.36, "distribution": "triangular"},
+    "crop_fraction": {"type": "float", "enabled": true, "default": 0.0, "min": 0.0, "max": 0.02, "active_min": 0.008, "activation_probability": 0.28, "distribution": "uniform"},
+    "zoom": {"type": "float", "enabled": true, "default": 1.0, "min": 1.0, "max": 1.03, "active_min": 1.01, "activation_probability": 0.3, "distribution": "triangular"},
+    "offset_x": {"type": "float", "enabled": true, "default": 0.0, "min": -0.018, "max": 0.018, "active_min_abs": 0.008, "activation_probability": 0.24, "distribution": "triangular"},
+    "offset_y": {"type": "float", "enabled": true, "default": 0.0, "min": -0.018, "max": 0.018, "active_min_abs": 0.008, "activation_probability": 0.24, "distribution": "triangular"},
+    "resize_scale": {"type": "float", "enabled": true, "default": 1.0, "min": 0.95, "max": 1.0, "active_max": 0.985, "activation_probability": 0.26, "distribution": "triangular"},
     "gaussian_blur_radius": {"type": "float", "enabled": true, "default": 0.0, "min": 0.0, "max": 0.25, "activation_probability": 0.025, "distribution": "uniform"},
     "median_size": {"type": "int", "enabled": false, "default": 1, "min": 1, "max": 5, "activation_probability": 0.0, "distribution": "choice"},
     "unsharp_radius": {"type": "float", "enabled": true, "default": 0.0, "min": 0.0, "max": 0.4, "activation_probability": 0.06, "distribution": "uniform"},

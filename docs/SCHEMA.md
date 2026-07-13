@@ -57,3 +57,12 @@ directory before database commit. All generated state belongs below `local/`.
 Scoped purge attaches `catalog_variants.sqlite3` to the benchmark connection and
 deletes both schemas inside one SQLite transaction. Filesystem paths are removed
 only after commit, limiting partial failure to harmless leftover generated files.
+# Barrière de diversité par image
+
+`recipe_tests` et `recipe_test_images` conservent le verdict de diversité et
+les voisins minimaux. `image_pair_distances` conserve les paires nécessaires à
+l'audit avec leurs composantes et la version de métrique. Dans la base finale,
+`listing_variants.diversity_valid` doit valoir 1 avant le passage à `ready` ;
+les minima intra-annonce/catalogue sont enregistrés au niveau variante et les
+voisins au niveau image. Toutes les comparaisons utilisent le même
+`image_index` et une seule image sous le seuil invalide le variant complet.

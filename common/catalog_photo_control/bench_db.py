@@ -81,6 +81,10 @@ CREATE TABLE IF NOT EXISTS recipe_tests (
     retained_output_dir TEXT,
     context_key TEXT NOT NULL DEFAULT 'unknown',
     evaluation_config_hash TEXT NOT NULL DEFAULT 'legacy',
+    diversity_valid INTEGER NOT NULL DEFAULT 1 CHECK(diversity_valid IN (0, 1)),
+    minimum_same_listing_distance REAL,
+    minimum_catalog_distance REAL,
+    diversity_reasons_json TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (listing_id, source_set_hash, recipe_id, evaluation_config_hash)
 );
@@ -95,6 +99,11 @@ CREATE TABLE IF NOT EXISTS recipe_test_images (
     output_hash TEXT,
     metrics_json TEXT NOT NULL,
     error_text TEXT,
+    diversity_valid INTEGER NOT NULL DEFAULT 1 CHECK(diversity_valid IN (0, 1)),
+    nearest_same_listing_json TEXT NOT NULL DEFAULT '{}',
+    nearest_catalog_json TEXT NOT NULL DEFAULT '{}',
+    reference_count_same_listing INTEGER NOT NULL DEFAULT 0,
+    reference_count_catalog INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (test_id, image_index)
 );
 CREATE TABLE IF NOT EXISTS run_tests (
@@ -114,6 +123,24 @@ CREATE TABLE IF NOT EXISTS recipe_pair_distances (
     CHECK(test_a < test_b),
     UNIQUE(listing_id, source_set_hash, test_a, test_b)
 );
+CREATE TABLE IF NOT EXISTS image_pair_distances (
+    distance_id INTEGER PRIMARY KEY,
+    candidate_test_id INTEGER NOT NULL REFERENCES recipe_tests(test_id) ON DELETE CASCADE,
+    candidate_image_index INTEGER NOT NULL CHECK(candidate_image_index >= 0),
+    reference_listing_id TEXT NOT NULL,
+    reference_source_set_hash TEXT NOT NULL,
+    reference_variant_id INTEGER,
+    reference_image_index INTEGER NOT NULL,
+    reference_output_hash TEXT NOT NULL,
+    scope TEXT NOT NULL CHECK(scope IN ('listing', 'catalog')),
+    total_distance REAL NOT NULL CHECK(total_distance >= 0 AND total_distance <= 1),
+    components_json TEXT NOT NULL,
+    metrics_version TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(candidate_test_id, candidate_image_index, reference_output_hash, scope)
+);
+CREATE INDEX IF NOT EXISTS idx_image_pair_candidate
+    ON image_pair_distances(candidate_test_id, candidate_image_index, scope, total_distance);
 CREATE TABLE IF NOT EXISTS recipe_global_stats (
     recipe_id INTEGER PRIMARY KEY REFERENCES recipes(recipe_id) ON DELETE CASCADE,
     tested_count INTEGER NOT NULL DEFAULT 0,
@@ -146,6 +173,7 @@ class BenchDatabase:
         self.connection = sqlite3.connect(self.path)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys = ON")
+        self._diversity_gates: dict[str, object] = {}
 
     def close(self) -> None:
         self.connection.close()
@@ -170,6 +198,26 @@ class BenchDatabase:
                     f"ALTER TABLE {table} ADD COLUMN recipe_family TEXT NOT NULL DEFAULT 'appearance_only'"
                 )
                 family_columns_added = True
+        additions = {
+            "recipe_tests": {
+                "diversity_valid": "INTEGER NOT NULL DEFAULT 1",
+                "minimum_same_listing_distance": "REAL",
+                "minimum_catalog_distance": "REAL",
+                "diversity_reasons_json": "TEXT NOT NULL DEFAULT '[]'",
+            },
+            "recipe_test_images": {
+                "diversity_valid": "INTEGER NOT NULL DEFAULT 1",
+                "nearest_same_listing_json": "TEXT NOT NULL DEFAULT '{}'",
+                "nearest_catalog_json": "TEXT NOT NULL DEFAULT '{}'",
+                "reference_count_same_listing": "INTEGER NOT NULL DEFAULT 0",
+                "reference_count_catalog": "INTEGER NOT NULL DEFAULT 0",
+            },
+        }
+        for table, definitions in additions.items():
+            columns = {row[1] for row in self.connection.execute(f"PRAGMA table_info({table})")}
+            for column, definition in definitions.items():
+                if column not in columns:
+                    self.connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
         from .recipe_schema import classify_recipe_family
 
         if family_columns_added:
@@ -228,6 +276,10 @@ class BenchDatabase:
                     retained_output_dir TEXT,
                     context_key TEXT NOT NULL DEFAULT 'unknown',
                     evaluation_config_hash TEXT NOT NULL DEFAULT 'legacy',
+                    diversity_valid INTEGER NOT NULL DEFAULT 1 CHECK(diversity_valid IN (0, 1)),
+                    minimum_same_listing_distance REAL,
+                    minimum_catalog_distance REAL,
+                    diversity_reasons_json TEXT NOT NULL DEFAULT '[]',
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE (listing_id, source_set_hash, recipe_id, evaluation_config_hash)
                 );
@@ -235,12 +287,16 @@ class BenchDatabase:
                     test_id, listing_id, source_set_hash, recipe_id, recipe_family,
                     complete, quality_valid, eligible, selected,
                     aggregate_metrics_json, error_text, retained_output_dir,
-                    context_key, evaluation_config_hash, created_at
+                    context_key, evaluation_config_hash, diversity_valid,
+                    minimum_same_listing_distance, minimum_catalog_distance,
+                    diversity_reasons_json, created_at
                 )
                 SELECT test_id, listing_id, source_set_hash, recipe_id, recipe_family,
                        complete, quality_valid, eligible, selected,
                        aggregate_metrics_json, error_text, retained_output_dir,
-                       context_key, evaluation_config_hash, created_at
+                       context_key, evaluation_config_hash, diversity_valid,
+                       minimum_same_listing_distance, minimum_catalog_distance,
+                       diversity_reasons_json, created_at
                 FROM recipe_tests;
                 DROP TABLE recipe_tests;
                 ALTER TABLE recipe_tests_new RENAME TO recipe_tests;
@@ -387,8 +443,10 @@ class BenchDatabase:
                 """INSERT INTO recipe_tests
                    (listing_id, source_set_hash, recipe_id, recipe_family, complete, quality_valid,
                     eligible, aggregate_metrics_json, error_text, retained_output_dir,
-                    context_key, evaluation_config_hash)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    context_key, evaluation_config_hash, diversity_valid,
+                    minimum_same_listing_distance, minimum_catalog_distance,
+                    diversity_reasons_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     test.listing_id,
                     test.source_set_hash,
@@ -402,14 +460,20 @@ class BenchDatabase:
                     retained_output_dir,
                     context_key,
                     evaluation_config_hash,
+                    int(bool(test.aggregate_metrics.get("diversity_valid", True))),
+                    test.aggregate_metrics.get("minimum_same_listing_distance"),
+                    test.aggregate_metrics.get("minimum_catalog_distance"),
+                    canonical_json(test.aggregate_metrics.get("diversity_reasons", [])),
                 ),
             )
             test_id = int(cursor.lastrowid)
             connection.executemany(
                 """INSERT INTO recipe_test_images
                    (test_id, image_index, source_hash, success, output_path,
-                    output_hash, metrics_json, error_text)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    output_hash, metrics_json, error_text, diversity_valid,
+                    nearest_same_listing_json, nearest_catalog_json,
+                    reference_count_same_listing, reference_count_catalog)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
                     (
                         test_id,
@@ -420,6 +484,11 @@ class BenchDatabase:
                         row.get("output_hash"),
                         canonical_json(row.get("metrics", {})),
                         row.get("error"),
+                        int(bool(row.get("diversity_valid", True))),
+                        str(row.get("nearest_same_listing_json", "{}")),
+                        str(row.get("nearest_catalog_json", "{}")),
+                        int(row.get("reference_count_same_listing", 0)),
+                        int(row.get("reference_count_catalog", 0)),
                     )
                     for row in image_rows
                 ],
@@ -444,6 +513,8 @@ class BenchDatabase:
         evaluation_config_hash: str = "legacy",
         *,
         force: bool = False,
+        diversity_config: Mapping[str, Any] | None = None,
+        variants_connection: sqlite3.Connection | None = None,
     ) -> TestExecution:
         from .image_pipeline import render_listing
         from .metrics import aggregate_metrics, image_metrics
@@ -517,6 +588,34 @@ class BenchDatabase:
                 geometry_active=recipe_family != "appearance_only",
             )
             aggregate["quality_score"] = quality.score
+            diversity = None
+            if quality.valid and diversity_config and diversity_config.get("enabled", False):
+                if variants_connection is None:
+                    raise ValueError("an enabled diversity gate requires the variants database")
+                from .diversity_gate import DiversityGate, nearest_to_json
+
+                gate_key = canonical_json(diversity_config)
+                gate = self._diversity_gates.get(gate_key)
+                if gate is None:
+                    gate = DiversityGate(variants_connection, diversity_config)
+                    self._diversity_gates[gate_key] = gate
+                diversity = gate.evaluate_variant(
+                    listing.listing_id,
+                    listing.source_set_hash,
+                    tuple((output.image_index, output.output_path) for output in rendered.images),
+                    recipe_family,
+                )
+                aggregate.update({
+                    "diversity_valid": diversity.valid,
+                    "diversity_gate_version": str(diversity_config.get("metrics_version", "unknown")),
+                    "minimum_same_listing_distance": diversity.minimum_same_listing_distance,
+                    "minimum_catalog_distance": diversity.minimum_catalog_distance,
+                    "diversity_reasons": list(diversity.reasons),
+                    "minimum_same_listing_threshold": float(diversity_config.get("family_thresholds", {}).get(recipe_family, {}).get("minimum_same_listing_distance", diversity_config.get("minimum_same_listing_distance", 0))),
+                    "minimum_catalog_threshold": float(diversity_config.get("family_thresholds", {}).get(recipe_family, {}).get("minimum_catalog_distance", diversity_config.get("minimum_catalog_distance", 0))),
+                })
+            else:
+                aggregate["diversity_valid"] = True
             rows = [
                 {
                     "image_index": output.image_index,
@@ -527,9 +626,21 @@ class BenchDatabase:
                     "metrics": metrics,
                     "output_width": output.width,
                     "output_height": output.height,
+                    "diversity_valid": diversity.images[position].valid if diversity else True,
+                    "nearest_same_listing_json": (
+                        nearest_to_json(diversity.images[position].nearest_same_listing)
+                        if diversity else "{}"
+                    ),
+                    "nearest_catalog_json": (
+                        nearest_to_json(diversity.images[position].nearest_catalog)
+                        if diversity else "{}"
+                    ),
+                    "reference_count_same_listing": diversity.images[position].reference_count_same_listing if diversity else 0,
+                    "reference_count_catalog": diversity.images[position].reference_count_catalog if diversity else 0,
                 }
-                for output, metrics in zip(rendered.images, metric_rows, strict=True)
+                for position, (output, metrics) in enumerate(zip(rendered.images, metric_rows, strict=True))
             ]
+            eligible = quality.valid and (diversity.valid if diversity else True)
             test = RecipeTest(
                 None,
                 listing.listing_id,
@@ -537,19 +648,48 @@ class BenchDatabase:
                 recipe,
                 True,
                 quality.valid,
-                quality.valid,
+                eligible,
                 aggregate,
-                error=",".join(quality.reasons) or None,
+                error=",".join((*quality.reasons, *(diversity.reasons if diversity else ()))) or None,
             )
             test_id = self.record_test(
                 test,
                 rows,
-                retained_output_dir=str(output_dir) if quality.valid else None,
+                retained_output_dir=str(output_dir) if eligible else None,
                 context_key=context_key,
                 evaluation_config_hash=evaluation_config_hash,
             )
+            if diversity:
+                from .visual_distance import DISTANCE_METRICS_VERSION
+
+                with self.connection:
+                    for image_verdict in diversity.images:
+                        for scope, neighbors in (
+                            ("listing", image_verdict.same_listing_neighbors),
+                            ("catalog", image_verdict.catalog_neighbors),
+                        ):
+                            for nearest in neighbors:
+                                reference = nearest.reference
+                                self.connection.execute(
+                                """INSERT OR REPLACE INTO image_pair_distances
+                                   (candidate_test_id, candidate_image_index,
+                                    reference_listing_id, reference_source_set_hash,
+                                    reference_variant_id, reference_image_index,
+                                    reference_output_hash, scope, total_distance,
+                                    components_json, metrics_version)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                (
+                                    test_id, image_verdict.image_index,
+                                    reference.listing_id, reference.source_set_hash,
+                                    reference.variant_id, reference.image_index,
+                                    reference.output_hash, scope,
+                                    nearest.distance.total_distance,
+                                    canonical_json(nearest.distance.components()),
+                                    DISTANCE_METRICS_VERSION,
+                                ),
+                                )
             refresh_recipe_statistics(self.connection, self.recipe_id(recipe))
-            if not quality.valid:
+            if not eligible:
                 shutil.rmtree(output_dir, ignore_errors=True)
                 output_dir_result = None
             else:
@@ -559,7 +699,7 @@ class BenchDatabase:
                 False,
                 True,
                 quality.valid,
-                quality.valid,
+                eligible,
                 aggregate,
                 output_dir_result,
                 test.error,
