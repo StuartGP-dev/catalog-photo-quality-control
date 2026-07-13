@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
 import pytest
 from common.catalog_photo_control.bench_db import BenchDatabase
 from common.catalog_photo_control.config import load_filter_space
@@ -48,4 +49,52 @@ def test_cache_is_scoped_by_evaluation_config_hash(synthetic_listing: Path, tmp_
     first = db.execute_recipe_test(listing, recipe, tmp_path / "a", space.quality_thresholds, "config-a")
     second = db.execute_recipe_test(listing, recipe, tmp_path / "b", space.quality_thresholds, "config-b")
     assert not first.cached and not second.cached and first.test_id != second.test_id
+    db.close()
+
+
+def test_legacy_cache_identity_is_migrated(
+    synthetic_listing: Path, tmp_path: Path
+) -> None:
+    path = tmp_path / "legacy.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """CREATE TABLE recipe_tests (
+                test_id INTEGER PRIMARY KEY,
+                listing_id TEXT NOT NULL,
+                source_set_hash TEXT NOT NULL,
+                recipe_id INTEGER NOT NULL,
+                complete INTEGER NOT NULL,
+                quality_valid INTEGER NOT NULL,
+                eligible INTEGER NOT NULL,
+                selected INTEGER NOT NULL DEFAULT 0,
+                aggregate_metrics_json TEXT NOT NULL,
+                error_text TEXT,
+                retained_output_dir TEXT,
+                context_key TEXT NOT NULL DEFAULT 'unknown',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(listing_id, source_set_hash, recipe_id)
+            )"""
+        )
+    listing = load_source_listing(synthetic_listing, listing_code="legacy-cache")
+    space = load_filter_space()
+    recipe = space.schema.canonicalize({"brightness": 1.01})
+    db = BenchDatabase(path)
+    db.initialize()
+    db.register_source(listing)
+    first = db.execute_recipe_test(
+        listing, recipe, tmp_path / "a", space.quality_thresholds, "config-a"
+    )
+    second = db.execute_recipe_test(
+        listing, recipe, tmp_path / "b", space.quality_thresholds, "config-b"
+    )
+    assert first.test_id != second.test_id
+    identities = {
+        tuple(item[2] for item in db.connection.execute(f"PRAGMA index_info({row[1]})"))
+        for row in db.connection.execute("PRAGMA index_list(recipe_tests)")
+        if row[2]
+    }
+    assert (
+        "listing_id", "source_set_hash", "recipe_id", "evaluation_config_hash"
+    ) in identities
+    assert db.connection.execute("PRAGMA foreign_key_check").fetchall() == []
     db.close()

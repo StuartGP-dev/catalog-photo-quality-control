@@ -186,6 +186,75 @@ class BenchDatabase:
                     (family, row["recipe_id"]),
                 )
         self.connection.commit()
+        self._migrate_recipe_test_identity()
+
+    def _migrate_recipe_test_identity(self) -> None:
+        """Replace the legacy three-column cache identity without losing history."""
+        unique_indexes = [
+            row
+            for row in self.connection.execute("PRAGMA index_list(recipe_tests)")
+            if row[2]
+        ]
+        identities = {
+            tuple(
+                item[2]
+                for item in self.connection.execute(
+                    f"PRAGMA index_info({index[1]})"
+                )
+            )
+            for index in unique_indexes
+        }
+        legacy = ("listing_id", "source_set_hash", "recipe_id")
+        current = legacy + ("evaluation_config_hash",)
+        if legacy not in identities or current in identities:
+            return
+        self.connection.commit()
+        self.connection.execute("PRAGMA foreign_keys = OFF")
+        try:
+            self.connection.executescript(
+                """
+                CREATE TABLE recipe_tests_new (
+                    test_id INTEGER PRIMARY KEY,
+                    listing_id TEXT NOT NULL REFERENCES source_listings(listing_id),
+                    source_set_hash TEXT NOT NULL,
+                    recipe_id INTEGER NOT NULL REFERENCES recipes(recipe_id),
+                    recipe_family TEXT NOT NULL DEFAULT 'appearance_only',
+                    complete INTEGER NOT NULL CHECK(complete IN (0, 1)),
+                    quality_valid INTEGER NOT NULL CHECK(quality_valid IN (0, 1)),
+                    eligible INTEGER NOT NULL CHECK(eligible IN (0, 1)),
+                    selected INTEGER NOT NULL DEFAULT 0 CHECK(selected IN (0, 1)),
+                    aggregate_metrics_json TEXT NOT NULL,
+                    error_text TEXT,
+                    retained_output_dir TEXT,
+                    context_key TEXT NOT NULL DEFAULT 'unknown',
+                    evaluation_config_hash TEXT NOT NULL DEFAULT 'legacy',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (listing_id, source_set_hash, recipe_id, evaluation_config_hash)
+                );
+                INSERT INTO recipe_tests_new (
+                    test_id, listing_id, source_set_hash, recipe_id, recipe_family,
+                    complete, quality_valid, eligible, selected,
+                    aggregate_metrics_json, error_text, retained_output_dir,
+                    context_key, evaluation_config_hash, created_at
+                )
+                SELECT test_id, listing_id, source_set_hash, recipe_id, recipe_family,
+                       complete, quality_valid, eligible, selected,
+                       aggregate_metrics_json, error_text, retained_output_dir,
+                       context_key, evaluation_config_hash, created_at
+                FROM recipe_tests;
+                DROP TABLE recipe_tests;
+                ALTER TABLE recipe_tests_new RENAME TO recipe_tests;
+                CREATE INDEX idx_recipe_tests_candidates
+                    ON recipe_tests(listing_id, source_set_hash, complete, quality_valid, eligible);
+                """
+            )
+        finally:
+            self.connection.execute("PRAGMA foreign_keys = ON")
+        violations = self.connection.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise sqlite3.IntegrityError(
+                f"foreign key violations after recipe-test migration: {violations[:3]}"
+            )
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
