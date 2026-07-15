@@ -5,6 +5,17 @@ Elle explore des transformations géométriques plus larges sur toutes les image
 d’une annonce, sans écrire dans `catalog_variants.sqlite3` et sans modifier les
 sources.
 
+Le rapport possède une revue humaine hors ligne. Chaque recette peut être
+acceptée, refusée ou marquée « à revoir », avec une note facultative. Les choix
+sont conservés dans le stockage local du navigateur et le bouton
+`Exporter mes choix JSON` télécharge un fichier autonome à transmettre pour la
+calibration ultérieure des limites. Ce fichier n'est jamais appliqué
+automatiquement aux seuils de production.
+
+L'enveloppe exploratoire couvre volontairement jusqu'à ±8° de rotation, 12 %
+de crop, zoom 1,20, dézoom 20 % et offsets ±12 %. Une classification automatique
+rouge ne masque pas le rendu : elle aide seulement la revue humaine.
+
 ```powershell
 python -m common.catalog_photo_control.calibrate `
   --listing "C:\catalogue\bijoux\O\O18" `

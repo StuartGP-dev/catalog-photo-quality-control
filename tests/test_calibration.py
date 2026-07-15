@@ -37,8 +37,8 @@ def _metrics(**changes: object) -> dict[str, object]:
 
 
 def test_coarse_steps_are_deterministic_and_keep_range_edges() -> None:
-    values = (0.25, 0.5, 0.8, 1.2, 1.6, 2.0, 2.5)
-    assert _sample_steps(values, 6) == (0.25, 0.5, 0.8, 1.6, 2.0, 2.5)
+    values = (0.25, 0.5, 0.8, 1.2, 2.0, 3.5, 5.0, 6.5, 8.0)
+    assert _sample_steps(values, 6) == (0.25, 0.8, 1.2, 3.5, 5.0, 8.0)
     assert _sample_steps(values, 6) == _sample_steps(values, 6)
 
 
@@ -168,6 +168,8 @@ def test_calibration_run_is_isolated_resumable_and_report_is_exhaustive(
         "Différence amplifiée", "Crop central", "Bords original / variant",
         "Boîte du contenu", "Recette canonique neutralisée", "Fond détecté",
         "very_subtle", "perceptible_candidate", "strong_candidate", "rejected",
+        "Exporter mes choix JSON", "Accepter", "Refuser", "À revoir",
+        "localStorage", "human_filter_choices_",
     ):
         assert expected in content
     manifest = json.loads(manifest_before)
