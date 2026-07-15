@@ -71,8 +71,7 @@ class RecipeGenerator:
             "crop_zoom", "crop_offset", "zoom_offset_x", "zoom_offset_y",
             "zoom_offsets", "crop_offsets", "dezoom_canvas", "dezoom_bands",
             "dezoom_frame", "rotation_dezoom_canvas", "rotation_dezoom_offset",
-            "dezoom_sampled", "mirror_crop", "mirror_zoom", "mirror_rotation",
-            "mirror_dezoom", "mirror_geometry_appearance", "perspective_crop",
+            "dezoom_sampled", "mirror_only", "mirror_appearance", "perspective_crop",
             "perspective_zoom", "shear_rotation", "geometry_appearance",
         )
         for _ in range(100):
@@ -112,7 +111,15 @@ class RecipeGenerator:
                 if abs(values["shear_x"]) < 0.015: values["shear_x"] = 0.02
             if "appearance" in template:
                 appearance = self.random.choice(["brightness", "contrast", "saturation", "warmth"])
-                values[appearance] = self._sample_value(self.schema.parameters[appearance])
+                if template == "mirror_appearance":
+                    values[appearance] = self._between(
+                        appearance,
+                        {"brightness": 0.97, "contrast": 0.97, "saturation": 0.97, "warmth": -0.02}[appearance],
+                        {"brightness": 1.03, "contrast": 1.03, "saturation": 1.03, "warmth": 0.02}[appearance],
+                        1.0 if appearance != "warmth" else 0.0,
+                    )
+                else:
+                    values[appearance] = self._sample_value(self.schema.parameters[appearance])
             if template == "dezoom_bands":
                 values["canvas_mode"] = "side_bands"
                 values["side_band_width"] = self._between("side_band_width", 0.012, 0.035, 0.02)

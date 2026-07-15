@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from PIL import Image, ImageDraw
+import pytest
 
 from common.catalog_photo_control.config import load_filter_space
 from common.catalog_photo_control.image_pipeline import apply_recipe, detect_background_color
@@ -53,5 +54,7 @@ def test_canvas_changes_recipe_hash_and_is_bounded() -> None:
     none = schema.canonicalize({})
     white = schema.canonicalize({"canvas_mode": "white", "canvas_padding_x": 0.01, "canvas_padding_y": 0.005})
     assert none.recipe_hash != white.recipe_hash
-    combined = schema.canonicalize({"canvas_mode": "white", "canvas_padding_x": 0.03, "canvas_padding_y": 0.018, "crop_fraction": 0.011})
+    combined = schema.canonicalize({"canvas_mode": "white", "canvas_padding_x": 0.01, "canvas_padding_y": 0.005, "crop_fraction": 0.011})
     assert combined.parameters["crop_fraction"] == 0.011
+    with pytest.raises(ValueError, match="recipe_too_intense"):
+        schema.canonicalize({"canvas_mode": "white", "canvas_padding_x": 0.03, "canvas_padding_y": 0.018, "crop_fraction": 0.011})

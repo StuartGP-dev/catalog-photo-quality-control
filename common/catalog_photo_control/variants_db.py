@@ -175,6 +175,16 @@ class VariantsDatabase:
             BEGIN
                 SELECT CASE WHEN NEW.diversity_valid != 1
                 THEN RAISE(ABORT, 'variant did not pass diversity gate') END;
+                SELECT CASE WHEN json_extract(NEW.recipe_json, '$.horizontal_mirror') = 'on'
+                  AND EXISTS (
+                    SELECT 1 FROM listing_variants existing
+                    WHERE existing.listing_id = NEW.listing_id
+                      AND existing.source_set_hash = NEW.source_set_hash
+                      AND existing.status = 'ready'
+                      AND existing.variant_id != NEW.variant_id
+                      AND json_extract(existing.recipe_json, '$.horizontal_mirror') = 'on'
+                  )
+                THEN RAISE(ABORT, 'ready mirror variant already exists') END;
                 SELECT CASE WHEN (
                     SELECT COUNT(*) FROM listing_variant_images WHERE variant_id = NEW.variant_id
                 ) != NEW.expected_image_count
@@ -241,6 +251,16 @@ class VariantsDatabase:
         ).fetchone()
         return int(row[0])
 
+    def has_ready_mirror(self, listing_id: str, source_set_hash: str) -> bool:
+        row = self.connection.execute(
+            """SELECT 1 FROM listing_variants
+               WHERE listing_id=? AND source_set_hash=? AND status='ready'
+                 AND json_extract(recipe_json, '$.horizontal_mirror')='on'
+               LIMIT 1""",
+            (listing_id, source_set_hash),
+        ).fetchone()
+        return row is not None
+
     def save_complete_variant(
         self,
         variant: ListingVariant,
@@ -249,6 +269,11 @@ class VariantsDatabase:
         if len(image_rows) != len(variant.image_paths) or not image_rows:
             raise ValueError("variant image rows must exactly match variant paths")
         with self.transaction() as connection:
+            if (
+                variant.recipe.parameters.get("horizontal_mirror", "off") == "on"
+                and self.has_ready_mirror(variant.listing_id, variant.source_set_hash)
+            ):
+                raise ValueError("ready mirror variant already exists")
             for row in image_rows:
                 duplicate = connection.execute(
                     """SELECT 1 FROM listing_variant_images image

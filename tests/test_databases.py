@@ -108,3 +108,30 @@ def test_complete_variant_is_committed_atomically(
     ).fetchone()
     assert tuple(row) == ("ready", "reserved")
     database.close()
+
+
+def test_only_one_ready_mirror_is_allowed_per_source_set(
+    synthetic_listing: Path, tmp_path: Path
+) -> None:
+    listing = load_source_listing(synthetic_listing, listing_code="synthetic")
+    schema = load_filter_space().schema
+    database = VariantsDatabase(tmp_path / "variants.sqlite3")
+    database.initialize()
+    database.register_source(listing)
+
+    def save(recipe, rank: int) -> int:
+        paths = tuple(tmp_path / f"mirror-{rank}-{image.index}.jpg" for image in listing.images)
+        variant = ListingVariant(None, listing.listing_id, listing.source_set_hash, recipe, paths, rank)
+        rows = [{
+            "image_index": image.index, "source_hash": image.source_hash,
+            "output_path": paths[image.index], "output_hash": f"mirror-{rank}-{image.index}",
+            "output_width": 100 + rank, "output_height": 100 + image.index, "metrics": {},
+        } for image in listing.images]
+        return database.save_complete_variant(variant, rows)
+
+    save(schema.canonicalize({"horizontal_mirror": "on"}), 1)
+    assert database.has_ready_mirror(listing.listing_id, listing.source_set_hash)
+    with pytest.raises(ValueError, match="ready mirror variant already exists"):
+        save(schema.canonicalize({"horizontal_mirror": "on", "brightness": 1.02}), 2)
+    assert database.ready_count(listing.listing_id, listing.source_set_hash) == 1
+    database.close()

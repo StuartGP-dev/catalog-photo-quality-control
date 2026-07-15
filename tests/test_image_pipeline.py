@@ -6,6 +6,7 @@ import pytest
 from PIL import Image, ImageDraw
 
 from common.catalog_photo_control.config import load_filter_space
+from common.catalog_photo_control.recipe_schema import classify_recipe_family
 from common.catalog_photo_control.image_pipeline import apply_recipe, render_listing
 from common.catalog_photo_control.source_loader import load_source_listing
 
@@ -68,6 +69,20 @@ def test_horizontal_mirror_rejects_directional_text_like_content() -> None:
         apply_recipe(image, recipe)
 
 
-def test_six_compatible_active_parameters_are_allowed() -> None:
-    recipe = load_filter_space().schema.canonicalize({"rotation_degrees": 2, "crop_fraction": .02, "offset_x": .02, "brightness": 1.04, "contrast": 1.04, "warmth": .02})
-    assert len([name for name in ("rotation_degrees", "crop_fraction", "offset_x", "brightness", "contrast", "warmth") if recipe.parameters[name] not in (0, 1)]) == 6
+def test_at_most_four_compatible_active_parameters_are_allowed() -> None:
+    schema = load_filter_space().schema
+    recipe = schema.canonicalize({"rotation_degrees": 1, "crop_fraction": .01, "brightness": 1.02, "warmth": .01})
+    defaults = schema.canonicalize({}).parameters
+    assert len([name for name in ("rotation_degrees", "crop_fraction", "brightness", "warmth") if recipe.parameters[name] != defaults[name]]) == 4
+    with pytest.raises(ValueError, match="too_many_active_parameters"):
+        schema.canonicalize({"rotation_degrees": 2, "crop_fraction": .02, "offset_x": .02, "brightness": 1.04, "contrast": 1.04, "warmth": .02})
+
+
+def test_mirror_is_only_standalone_or_with_one_light_adjustment() -> None:
+    schema = load_filter_space().schema
+    recipe = schema.canonicalize({"horizontal_mirror": "on", "brightness": 1.02})
+    assert classify_recipe_family(recipe.parameters) == "mirror_only_family"
+    with pytest.raises(ValueError, match="mirror_forbidden_combination"):
+        schema.canonicalize({"horizontal_mirror": "on", "crop_fraction": .02, "offset_y": .02, "perspective_y": .02})
+    with pytest.raises(ValueError, match="mirror_too_many_active_parameters"):
+        schema.canonicalize({"horizontal_mirror": "on", "brightness": 1.02, "contrast": 1.02})

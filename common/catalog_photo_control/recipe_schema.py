@@ -179,6 +179,17 @@ class RecipeSchema:
             raise ValueError("too_many_active_parameters")
         if analysis.recipe_intensity > self.maximum_recipe_intensity:
             raise ValueError("recipe_too_intense")
+        if values.get("horizontal_mirror", "off") == "on":
+            allowed = {
+                "horizontal_mirror", "brightness", "contrast", "saturation",
+                "sharpness", "gamma", "warmth", "tint",
+            }
+            if set(analysis.active_parameters) - allowed:
+                raise ValueError("mirror_forbidden_combination")
+            if analysis.active_parameter_count > 2:
+                raise ValueError("mirror_too_many_active_parameters")
+            if analysis.recipe_intensity > 0.6:
+                raise ValueError("mirror_recipe_too_intense")
         return Recipe.from_parameters(values)
 
     def _matches(self, condition: Mapping[str, Any], values: Mapping[str, Any]) -> bool:
@@ -234,7 +245,7 @@ def classify_recipe_family(values: Mapping[str, Any]) -> str:
     mirror = values.get("horizontal_mirror", "off") == "on"
     perspective = any(abs(float(values.get(name, 0))) > 1e-12 for name in ("shear_x", "shear_y", "perspective_x", "perspective_y"))
     if mirror:
-        return "mirror_mixed_family" if (rotation or crop or zoom or dezoom or offset or perspective) else "mirror_family"
+        return "mirror_only_family"
     if perspective:
         return "perspective_family" if not (rotation or crop or zoom or dezoom or offset) else "mixed_geometry_family"
     if dezoom:

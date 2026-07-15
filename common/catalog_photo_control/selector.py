@@ -129,6 +129,11 @@ def select_max_min(
         comparison_metrics.append(chosen.aggregate_metrics)
         family_counts[chosen.recipe_family] = family_counts.get(chosen.recipe_family, 0) + 1
         remaining.remove(chosen)
+        if chosen.recipe.parameters.get("horizontal_mirror", "off") == "on":
+            remaining = [
+                candidate for candidate in remaining
+                if candidate.recipe.parameters.get("horizontal_mirror", "off") != "on"
+            ]
         chosen_dimensions = chosen.output_dimensions
         if chosen_dimensions:
             remaining = [
@@ -216,6 +221,9 @@ def select_and_persist(
     if needed == 0:
         return []
     existing_hashes = {row["recipe_hash"] for row in existing_rows}
+    mirror_already_ready = variants.has_ready_mirror(
+        listing.listing_id, listing.source_set_hash
+    )
     existing_metrics = [json.loads(row["aggregate_metrics_json"]) for row in existing_rows]
     selected_references = [
         (int(row["bench_test_id"]), json.loads(row["aggregate_metrics_json"]))
@@ -226,6 +234,10 @@ def select_and_persist(
         candidate
         for candidate in load_eligible_candidates(bench_connection, listing)
         if candidate.recipe.recipe_hash not in existing_hashes
+        and not (
+            mirror_already_ready
+            and candidate.recipe.parameters.get("horizontal_mirror", "off") == "on"
+        )
     ]
     seen_dimensions = {
         (int(row[0]), int(row[1]))

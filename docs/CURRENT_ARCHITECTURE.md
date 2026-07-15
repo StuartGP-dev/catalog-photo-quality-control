@@ -21,6 +21,13 @@ rechecks the barrier immediately before its atomic final insert. `html_report.py
 is the single benchmark report writer. `perceptual_calibration.py` creates a
 portable one-file HTML report plus local assets without modifying source images.
 
+The production envelope permits at most four active parameters and normalized
+recipe intensity 1.2. Every rendered image must keep SSIM at least 0.90, pixel
+and luminance MAE at most 0.06, and sharpness ratio between 0.70 and 1.60.
+Horizontal mirror is the special `mirror_only_family`: at most one light
+appearance adjustment may accompany it, its intensity is capped at 0.6, and
+the final database permits only one ready mirror per listing/source-set.
+
 The removed `visual_distance.py`, `diversity_analysis.py`, and
 `audit_diversity.py` implemented the replaced weighted-score decision and
 report path. Repository tests assert that no second perceptual verdict engine
