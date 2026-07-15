@@ -33,6 +33,12 @@ def test_max_min_starts_with_quality_then_chooses_diversity() -> None:
     assert "mean_brightness" in selected[1].distance_components
 
 
+def test_perceptual_limiting_distance_precedes_family_or_quality_bonus() -> None:
+    close = Candidate(1, Recipe.from_parameters({"identity": 1}), {"quality_score": 1.0, "variant_limiting_distance": 20, "recipe_family": "rare"}, ())
+    distant = Candidate(2, Recipe.from_parameters({"identity": 2}), {"quality_score": 0.8, "variant_limiting_distance": 40, "recipe_family": "common"}, ())
+    assert select_max_min([close, distant], 1)[0].candidate.test_id == 2
+
+
 def test_max_min_excludes_dimensions_only_after_selection(tmp_path: Path) -> None:
     def with_dimensions(index: int, width: int) -> Candidate:
         return Candidate(

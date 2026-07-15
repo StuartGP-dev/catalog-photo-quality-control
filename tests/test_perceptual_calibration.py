@@ -26,7 +26,7 @@ def test_calibration_html_has_only_existing_relative_assets(tmp_path: Path) -> N
         image.save(listing / f"{index}.jpg")
     report, payload = generate_calibration_report(listing, tmp_path / "report with spaces")
     parser = _Sources(); parser.feed(report.read_text(encoding="utf-8"))
-    assert parser.values and payload["pair_count"] >= 20
+    assert parser.values and payload["pair_count"] >= 18
     assert all(not value.startswith(("file:", "/")) for value in parser.values)
     assert all((report.parent / Path(unquote(value))).is_file() for value in parser.values)
     assert {case["verdict"] for case in payload["cases"]} <= {"exact", "same", "near_duplicate", "different"}

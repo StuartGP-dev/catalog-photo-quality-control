@@ -16,6 +16,7 @@ def evaluate_quality(
     thresholds: Mapping[str, float],
     *,
     geometry_active: bool = False,
+    structural_reorientation: bool = False,
 ) -> QualityResult:
     if not per_image:
         return QualityResult(False, 0.0, ("no_images",))
@@ -51,7 +52,9 @@ def evaluate_quality(
             reasons.append("fidelity_pixel_mae")
         if float(metrics["luminance_mae"]) > max_luminance_mae:
             reasons.append("fidelity_luminance_mae")
-        if geometry_active:
+        if structural_reorientation:
+            pass
+        elif geometry_active:
             geometry_ssim = float(
                 metrics.get("perceptual_geometry_ssim", metrics["ssim"])
             )

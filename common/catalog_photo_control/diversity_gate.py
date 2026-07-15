@@ -39,6 +39,7 @@ class ImageDiversityVerdict:
     valid: bool
     status: str
     nearest: NearestReference | None
+    original: NearestReference
     neighbors: tuple[NearestReference, ...]
     reference_count: int
     reasons: tuple[str, ...]
@@ -49,6 +50,7 @@ class VariantDiversityVerdict:
     valid: bool
     images: tuple[ImageDiversityVerdict, ...]
     reasons: tuple[str, ...]
+    limiting_distance: int
 
 
 def validate_diversity_config(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -56,8 +58,8 @@ def validate_diversity_config(config: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("only same-image-index similarity comparison is supported")
     normalized = validate_similarity_config(config)
     normalized["include_ready_variants"] = bool(config.get("include_ready_variants", True))
-    # Source images are quality references, not already-kept final variants.
-    normalized["include_source_images"] = False
+    normalized["include_source_images"] = bool(config.get("include_source_images", True))
+    normalized["reject_original_verdicts"] = tuple(config.get("reject_original_verdicts", normalized["reject_verdicts"]))
     return normalized
 
 
@@ -89,8 +91,9 @@ class DiversityGate:
                JOIN listing_variants variant USING(variant_id)
                JOIN listings listing USING(listing_id)
                WHERE image.image_index=? AND variant.status='ready'
+                 AND variant.listing_id=? AND variant.source_set_hash=?
                  AND variant.source_set_hash=listing.active_source_set_hash""",
-            (image_index,),
+            (image_index, listing_id, source_set_hash),
         ).fetchall()
         seen: set[str] = set()
         references: list[ImageReference] = []
@@ -106,6 +109,18 @@ class DiversityGate:
             ))
         return references
 
+    def original(self, listing_id: str, source_set_hash: str, image_index: int) -> ImageReference:
+        row = self.connection.execute(
+            """SELECT image.listing_id, listing.listing_code, image.source_set_hash,
+                      image.image_index, image.source_path AS path, image.source_hash AS output_hash
+               FROM listing_images image JOIN listings listing USING(listing_id)
+               WHERE image.listing_id=? AND image.source_set_hash=? AND image.image_index=?""",
+            (listing_id, source_set_hash, image_index),
+        ).fetchone()
+        if row is None or not Path(row["path"]).is_file():
+            raise FileNotFoundError(f"missing source image {listing_id}:{source_set_hash}:{image_index}")
+        return ImageReference(str(row["listing_id"]), str(row["listing_code"]), str(row["source_set_hash"]), int(row["image_index"]), Path(row["path"]), str(row["output_hash"]), None, "source")
+
     def evaluate_image(
         self,
         listing_id: str,
@@ -118,6 +133,8 @@ class DiversityGate:
         candidate_resolved = candidate_path.resolve()
         references = [row for row in self.references(listing_id, source_set_hash, image_index) if row.path.resolve() != candidate_resolved]
         candidate_hashes = self._hashes(candidate_path)
+        original_reference = self.original(listing_id, source_set_hash, image_index)
+        original = NearestReference(original_reference, compare_hashes(self._hashes(original_reference.path), candidate_hashes, self.config["band_limits"], self.config["consensus"]))
         neighbors = sorted(
             (
                 NearestReference(
@@ -130,16 +147,17 @@ class DiversityGate:
         )
         nearest = neighbors[0] if neighbors else None
         rejected = [row for row in neighbors if row.comparison.verdict in self.config["reject_verdicts"]]
-        reasons = () if not rejected else (
-            "perceptual_duplicate",
-            f"perceptual_duplicate_image_{image_index}",
-            f"perceptual_{rejected[0].comparison.verdict}_image_{image_index}",
-        )
+        reasons: tuple[str, ...] = ()
+        if original.comparison.verdict in self.config["reject_original_verdicts"]:
+            reasons += ("perceptual_original_too_close", f"perceptual_original_too_close_image_{image_index}")
+        if rejected:
+            reasons += ("perceptual_ready_too_close", f"perceptual_ready_too_close_image_{image_index}")
         return ImageDiversityVerdict(
             image_index,
-            not rejected,
-            "no_reference_yet" if not references else ("accepted" if not rejected else "rejected"),
+            not reasons,
+            "rejected" if reasons else ("no_ready_reference_yet" if not references else "accepted"),
             nearest,
+            original,
             tuple(neighbors[: self.config["nearest_neighbors_to_persist"]]),
             len(references),
             reasons,
@@ -157,7 +175,8 @@ class DiversityGate:
             for index, path in images
         )
         reasons = tuple(reason for verdict in verdicts for reason in verdict.reasons)
-        return VariantDiversityVerdict(not reasons, verdicts, reasons)
+        limiting = min(sum(comparison.distances()) for row in verdicts for comparison in (row.original.comparison, *(neighbor.comparison for neighbor in row.neighbors)))
+        return VariantDiversityVerdict(not reasons, verdicts, reasons, limiting)
 
 
 def nearest_to_json(nearest: NearestReference | None) -> str:

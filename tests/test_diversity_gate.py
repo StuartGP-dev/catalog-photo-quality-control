@@ -111,9 +111,19 @@ def test_gate_uses_ready_same_index_deduplicates_and_ignores_missing(tmp_path: P
     verdict = DiversityGate(db.connection, _config()).evaluate_image(listing.listing_id, listing.source_set_hash, 0, candidate)
     assert not verdict.valid and verdict.reference_count == 1 and verdict.nearest.comparison.verdict == "exact"
     no_reference = DiversityGate(db.connection, _config()).evaluate_image(listing.listing_id, listing.source_set_hash, 1, candidate)
-    assert no_reference.valid and no_reference.status == "no_reference_yet"
+    assert no_reference.valid and no_reference.status == "no_ready_reference_yet"
     payload = json.loads(nearest_to_json(verdict.nearest))
     assert payload["image_index"] == 0 and {payload[name]["band"] for name in ("phash", "dhash", "whash")} == {"exact"}
+    db.close()
+
+
+def test_candidate_close_to_its_original_is_rejected_without_ready_variants(tmp_path: Path) -> None:
+    listing = _listing(tmp_path, 1); db = VariantsDatabase(tmp_path / "variants.sqlite3"); db.initialize(); db.register_source(listing)
+    candidate = tmp_path / "source-copy.png"; candidate.write_bytes(listing.images[0].path.read_bytes())
+    verdict = DiversityGate(db.connection, _config()).evaluate_image(listing.listing_id, listing.source_set_hash, 0, candidate)
+    assert not verdict.valid and verdict.original.comparison.verdict == "exact"
+    assert "perceptual_original_too_close_image_0" in verdict.reasons
+    assert verdict.reference_count == 0
     db.close()
 
 
@@ -129,7 +139,7 @@ def test_five_image_near_duplicate_rejects_atomically_without_final_rows(tmp_pat
     before_variants = db.connection.execute("SELECT COUNT(*) FROM listing_variants").fetchone()[0]
     before_images = db.connection.execute("SELECT COUNT(*) FROM listing_variant_images").fetchone()[0]
     verdict = DiversityGate(db.connection, _config()).evaluate_variant(listing.listing_id, listing.source_set_hash, candidates)
-    assert not verdict.valid and "perceptual_duplicate_image_0" in verdict.reasons
+    assert not verdict.valid and "perceptual_ready_too_close_image_0" in verdict.reasons
     rejected = ListingVariant(None, listing.listing_id, listing.source_set_hash, Recipe.from_parameters({"rejected": 1}), tuple(path for _, path in candidates), 2, diversity_gate_version=SIMILARITY_ENGINE_VERSION, diversity_valid=False)
     rows = [{"image_index": index, "source_hash": listing.images[index].source_hash, "output_path": path, "output_hash": hashlib.sha256(path.read_bytes()).hexdigest(), "metrics": {"output_width": 91 + index, "output_height": 71 + index}} for index, path in candidates]
     with pytest.raises(Exception, match="diversity gate"):

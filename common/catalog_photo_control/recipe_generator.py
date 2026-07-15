@@ -67,46 +67,52 @@ class RecipeGenerator:
 
     def _geometry_template(self) -> Recipe:
         templates = (
-            "crop", "crop", "rotation", "zoom", "zoom", "rotation_crop", "rotation_crop_zoom",
-            "zoom_offset_x", "zoom_offset_y",
+            "crop", "rotation", "zoom", "rotation_crop", "rotation_zoom", "rotation_offset", "rotation_crop_offset",
+            "crop_zoom", "crop_offset", "zoom_offset_x", "zoom_offset_y",
             "zoom_offsets", "crop_offsets", "dezoom_canvas", "dezoom_bands",
             "dezoom_frame", "rotation_dezoom_canvas", "rotation_dezoom_offset",
-            "dezoom_sampled",
+            "dezoom_sampled", "mirror_crop", "mirror_zoom", "mirror_rotation",
+            "mirror_dezoom", "mirror_geometry_appearance", "perspective_crop",
+            "perspective_zoom", "shear_rotation", "geometry_appearance",
         )
         for _ in range(100):
             values = self._defaults()
             template = self.random.choice(templates)
-            rotation = self._between("rotation_degrees", -1.8, 1.8, 0.0)
-            if abs(rotation) < 0.8:
-                rotation = 0.8 if rotation >= 0 else -0.8
-            crop = self._between(
-                "crop_fraction", 0.008, 0.018 if template == "crop" else 0.014, 0.01
-            )
-            zoom = self._between(
-                "zoom", 1.01, 1.026 if template == "zoom" else 1.02, 1.014
-            )
-            offset_x = self._between("offset_x", -0.016, 0.016, 0.0)
-            offset_y = self._between("offset_y", -0.016, 0.016, 0.0)
-            if abs(offset_x) < 0.008:
-                offset_x = 0.008 if offset_x >= 0 else -0.008
-            if abs(offset_y) < 0.008:
-                offset_y = 0.008 if offset_y >= 0 else -0.008
-            dezoom = self._between("resize_scale", 0.955, 0.98, 0.968)
-            if template.startswith("rotation"):
+            rotation = self._between("rotation_degrees", -8, 8, 0.0)
+            if abs(rotation) < 1: rotation = 1 if rotation >= 0 else -1
+            crop = self._between("crop_fraction", 0.005, 0.09, 0.035)
+            zoom = self._between("zoom", 1.005, 1.15, 1.05)
+            offset_x = self._between("offset_x", -0.10, 0.10, 0.0)
+            offset_y = self._between("offset_y", -0.10, 0.10, 0.0)
+            if abs(offset_x) < 0.01: offset_x = 0.01 if offset_x >= 0 else -0.01
+            if abs(offset_y) < 0.01: offset_y = 0.01 if offset_y >= 0 else -0.01
+            dezoom = self._between("resize_scale", 0.82, 0.99, 0.93)
+            if "rotation" in template:
                 values["rotation_degrees"] = rotation
             if "crop" in template:
                 values["crop_fraction"] = crop
             if "zoom" in template and "dezoom" not in template:
                 values["zoom"] = zoom
-            if template in {"zoom_offset_x", "zoom_offsets", "crop_offsets"}:
+            if template in {"zoom_offset_x", "zoom_offsets", "crop_offsets", "crop_offset", "rotation_offset", "rotation_crop_offset"}:
                 values["offset_x"] = offset_x
-            if template in {"zoom_offset_y", "zoom_offsets", "crop_offsets", "rotation_dezoom_offset"}:
+            if template in {"zoom_offset_y", "zoom_offsets", "crop_offsets", "crop_offset", "rotation_offset", "rotation_crop_offset", "rotation_dezoom_offset"}:
                 values["offset_y"] = offset_y
             if "dezoom" in template:
                 values["resize_scale"] = dezoom
                 values["canvas_mode"] = self.random.choice(
                     ["white", "light_gray", "sampled_background", "sampled_edge"]
                 )
+            if "mirror" in template:
+                values["horizontal_mirror"] = "on"
+            if "perspective" in template:
+                values["perspective_x"] = self._between("perspective_x", -0.07, 0.07, 0.0)
+                if abs(values["perspective_x"]) < 0.01: values["perspective_x"] = 0.02
+            if "shear" in template:
+                values["shear_x"] = self._between("shear_x", -0.08, 0.08, 0.0)
+                if abs(values["shear_x"]) < 0.015: values["shear_x"] = 0.02
+            if "appearance" in template:
+                appearance = self.random.choice(["brightness", "contrast", "saturation", "warmth"])
+                values[appearance] = self._sample_value(self.schema.parameters[appearance])
             if template == "dezoom_bands":
                 values["canvas_mode"] = "side_bands"
                 values["side_band_width"] = self._between("side_band_width", 0.012, 0.035, 0.02)

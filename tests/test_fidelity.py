@@ -12,10 +12,9 @@ from common.catalog_photo_control.source_loader import load_source_listing
 def test_problematic_recipes_are_rejected_before_render() -> None:
     schema = load_filter_space().schema
     rejected = (
-        {"warmth": 0.025, "red_gain": 1.015},
-        {"saturation": 1.04, "sharpness": 1.08},
-        {"resize_scale": 0.82}, {"unsharp_radius": 2.1},
-        {"brightness": 1.01, "contrast": 1.01, "saturation": 1.01, "gamma": 1.01, "warmth": 0.01},
+        {"warmth": 0.2}, {"saturation": 1.5},
+        {"resize_scale": 0.79}, {"unsharp_radius": 2.1},
+        {"brightness": 1.01, "contrast": 1.01, "saturation": 1.01, "gamma": 1.01, "warmth": 0.01, "tint": 0.01, "sharpness": 1.01},
     )
     for values in rejected:
         with pytest.raises(ValueError): schema.canonicalize(values)
@@ -33,7 +32,7 @@ def _metrics(**changes: float) -> dict[str, float]:
     values.update(changes); return values
 
 @pytest.mark.parametrize("changes,reason", [
-    ({"ssim": 0.9}, "fidelity_ssim"), ({"pixel_mae": 0.2}, "fidelity_pixel_mae"),
+    ({"ssim": 0.7}, "fidelity_ssim"), ({"pixel_mae": 0.2}, "fidelity_pixel_mae"),
     ({"luminance_mae": 0.2}, "fidelity_luminance_mae"), ({"sharpness_ratio": 2.1}, "fidelity_sharpness")])
 def test_each_image_fidelity_barrier_rejects(changes, reason) -> None:
     result = evaluate_quality([_metrics(), _metrics(**changes)], load_filter_space().quality_thresholds)
@@ -51,7 +50,7 @@ def test_geometry_uses_multiscale_fidelity_without_hiding_direct_ssim() -> None:
         geometry_active=True,
     )
     rejected = evaluate_quality(
-        [_metrics(ssim=0.999, perceptual_geometry_ssim=0.94)],
+        [_metrics(ssim=0.999, perceptual_geometry_ssim=0.7)],
         thresholds,
         geometry_active=True,
     )

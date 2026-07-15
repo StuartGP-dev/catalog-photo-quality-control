@@ -8,8 +8,9 @@ barrier, then performs max-min selection among valid candidates only.
 `image_similarity.py` is the sole source of perceptual identity decisions. It
 computes SHA-256 and EXIF-normalized pHash/dHash/wHash 64-bit values, raw Hamming
 distances, calibrated bands, consensus verdicts, and readable reasons.
-`diversity_gate.py` supplies ready references of the matching image index,
-deduplicates output hashes, and rejects a complete candidate on one failing
+`diversity_gate.py` first compares each output with its exact source, then with
+every ready output from the same listing, source version, and image index. It
+deduplicates ready hashes and rejects the complete candidate on one failing
 image. Quality-only SSIM, MAE, sharpness, clipping, geometry, and canvas
 diagnostics remain in `metrics.py` and `quality.py`; they never decide image
 identity.

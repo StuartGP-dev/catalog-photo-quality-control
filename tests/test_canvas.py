@@ -53,9 +53,5 @@ def test_canvas_changes_recipe_hash_and_is_bounded() -> None:
     none = schema.canonicalize({})
     white = schema.canonicalize({"canvas_mode": "white", "canvas_padding_x": 0.01, "canvas_padding_y": 0.005})
     assert none.recipe_hash != white.recipe_hash
-    try:
-        schema.canonicalize({"canvas_mode": "white", "canvas_padding_x": 0.03, "canvas_padding_y": 0.018, "crop_fraction": 0.011})
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("large canvas/crop combination accepted")
+    combined = schema.canonicalize({"canvas_mode": "white", "canvas_padding_x": 0.03, "canvas_padding_y": 0.018, "crop_fraction": 0.011})
+    assert combined.parameters["crop_fraction"] == 0.011

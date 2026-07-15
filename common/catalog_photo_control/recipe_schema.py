@@ -203,12 +203,17 @@ class RecipeSchema:
 
 
 GEOMETRY_PARAMETERS = (
+    "horizontal_mirror",
     "rotation_degrees",
     "crop_fraction",
     "zoom",
     "resize_scale",
     "offset_x",
     "offset_y",
+    "shear_x",
+    "shear_y",
+    "perspective_x",
+    "perspective_y",
 )
 
 
@@ -226,6 +231,12 @@ def classify_recipe_family(values: Mapping[str, Any]) -> str:
     offset = abs(float(values.get("offset_x", 0.0))) > 1e-12 or abs(
         float(values.get("offset_y", 0.0))
     ) > 1e-12
+    mirror = values.get("horizontal_mirror", "off") == "on"
+    perspective = any(abs(float(values.get(name, 0))) > 1e-12 for name in ("shear_x", "shear_y", "perspective_x", "perspective_y"))
+    if mirror:
+        return "mirror_mixed_family" if (rotation or crop or zoom or dezoom or offset or perspective) else "mirror_family"
+    if perspective:
+        return "perspective_family" if not (rotation or crop or zoom or dezoom or offset) else "mixed_geometry_family"
     if dezoom:
         return "mixed_geometry_family" if (crop or zoom) else "dezoom_canvas_family"
     if rotation:

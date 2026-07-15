@@ -596,6 +596,7 @@ class BenchDatabase:
                 metric_rows,
                 quality_thresholds,
                 geometry_active=recipe_family != "appearance_only",
+                structural_reorientation=recipe.parameters.get("horizontal_mirror", "off") == "on",
             )
             aggregate["quality_score"] = quality.score
             diversity = None
@@ -621,6 +622,7 @@ class BenchDatabase:
                     "diversity_reasons": list(diversity.reasons),
                     "limiting_image_index": next((row.image_index for row in diversity.images if not row.valid), None),
                     "limiting_verdict": next((row.nearest.comparison.verdict for row in diversity.images if not row.valid and row.nearest), None),
+                    "variant_limiting_distance": diversity.limiting_distance,
                 })
             else:
                 aggregate["diversity_valid"] = True
@@ -636,7 +638,7 @@ class BenchDatabase:
                     "output_height": output.height,
                     "diversity_valid": diversity.images[position].valid if diversity else True,
                     "nearest_same_listing_json": nearest_to_json(diversity.images[position].nearest) if diversity else "{}",
-                    "nearest_catalog_json": "{}",
+                    "nearest_catalog_json": nearest_to_json(diversity.images[position].original) if diversity else "{}",
                     "reference_count_same_listing": diversity.images[position].reference_count if diversity else 0,
                     "reference_count_catalog": 0,
                 }
@@ -664,7 +666,7 @@ class BenchDatabase:
             if diversity:
                 with self.connection:
                     for image_verdict in diversity.images:
-                        for nearest in image_verdict.neighbors:
+                        for nearest in (image_verdict.original, *image_verdict.neighbors):
                                 reference = nearest.reference
                                 comparison = nearest.comparison
                                 self.connection.execute(

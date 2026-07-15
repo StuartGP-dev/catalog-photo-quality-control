@@ -46,6 +46,17 @@ def _save_cases(source: Path, assets: Path, index: int) -> list[tuple[str, Path,
         ("crop_1.8", cropped), ("zoom_1.8", cropped.copy()), ("dezoom_4", dezoom), ("offset_1.8", offset),
         ("visibly_different", ImageOps.grayscale(image).convert("RGB").transpose(Image.Transpose.FLIP_LEFT_RIGHT)),
     ]
+    cases.extend([
+        ("rotation_5", image.rotate(5, Image.Resampling.BICUBIC, fillcolor=(245, 245, 245))),
+        ("crop_8", image.crop((int(width*.08), int(height*.08), int(width*.92), int(height*.92))).resize(image.size, Image.Resampling.LANCZOS)),
+        ("zoom_12", image.crop((int(width*.055), int(height*.055), int(width*.945), int(height*.945))).resize(image.size, Image.Resampling.LANCZOS)),
+        ("dezoom_15", ImageOps.pad(image.resize((int(width*.85), int(height*.85))), image.size, color=(245,245,245))),
+        ("offset_9", ImageOps.pad(image.crop((0, 0, int(width*.91), height)), image.size, color=(245,245,245), centering=(1, .5))),
+        ("mirror", ImageOps.mirror(image)),
+        ("perspective_6", image.transform(image.size, Image.Transform.QUAD, (width*.06,0,width,0,width*.94,height,0,height), Image.Resampling.BICUBIC, fillcolor=(245,245,245))),
+        ("rotation_crop_offset", image.rotate(4, Image.Resampling.BICUBIC, fillcolor=(245,245,245)).crop((int(width*.04),int(height*.04),int(width*.96),int(height*.96))).resize(image.size)),
+        ("mirror_zoom_brightness", ImageEnhance.Brightness(ImageOps.mirror(image).resize((int(width*1.08),int(height*1.08))).crop((int(width*.04),int(height*.04),int(width*1.04),int(height*1.04)))).enhance(1.04)),
+    ])
     rows = [("self", reference, reference)]
     for label, candidate in cases:
         path = assets / f"image_{index}_{label}.jpg"; candidate.save(path, "JPEG", quality=93)
@@ -69,15 +80,6 @@ def generate_calibration_report(listing_dir: str | Path, output_dir: str | Path)
     for index, source in enumerate(sources):
         for label, reference, candidate in _save_cases(source, assets, index):
             rows.append({"image_index": index, "case": label, "reference": reference, "candidate": candidate, "result": compare_images(reference, candidate)})
-        other = assets / f"image_{index}_other_o18_view.jpg"; shutil.copy2(sources[(index + 1) % len(sources)], other)
-        reference = assets / f"image_{index}_reference.jpg"
-        rows.append({"image_index": index, "case": "other_O18_view", "reference": reference, "candidate": other, "result": compare_images(reference, other)})
-    other_product = next((path for folder in sorted(source_dir.parent.iterdir()) if folder.is_dir() and folder != source_dir for path in sorted(folder.iterdir()) if path.suffix.lower() in IMAGE_SUFFIXES), None)
-    if other_product:
-        copied = assets / "other_product.jpg"; shutil.copy2(other_product, copied)
-        for index in range(len(sources)):
-            reference = assets / f"image_{index}_reference.jpg"
-            rows.append({"image_index": index, "case": "other_product", "reference": reference, "candidate": copied, "result": compare_images(reference, copied)})
     rows.sort(key=_distance_key)
     summaries = {}
     for name in ("phash", "dhash", "whash"):

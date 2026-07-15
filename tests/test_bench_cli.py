@@ -34,9 +34,9 @@ def test_cli_generates_exactly_one_html_with_all_selected_images(
             "--listing", str(synthetic_listing),
             "--local-root", str(tmp_path / "local"),
             "--target-variants", "2",
-            "--max-tests", "20",
+            "--max-tests", "100",
             "--max-duration-minutes", "1",
-            "--patience", "20",
+            "--patience", "100",
             "--seed", "7",
             "--quiet",
         ]

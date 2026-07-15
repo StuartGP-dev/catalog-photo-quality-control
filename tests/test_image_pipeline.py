@@ -3,9 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from PIL import Image, ImageDraw
 
 from common.catalog_photo_control.config import load_filter_space
-from common.catalog_photo_control.image_pipeline import render_listing
+from common.catalog_photo_control.image_pipeline import apply_recipe, render_listing
 from common.catalog_photo_control.source_loader import load_source_listing
 
 
@@ -46,3 +47,27 @@ def test_one_image_failure_rolls_back_whole_variant(
 
     assert not destination.exists()
     assert not list(tmp_path.glob(".variant-*"))
+
+
+def test_horizontal_mirror_is_supported_and_vertical_mirror_is_unknown() -> None:
+    schema = load_filter_space().schema
+    recipe = schema.canonicalize({"horizontal_mirror": "on"})
+    image = Image.new("RGB", (60, 40), "white"); ImageDraw.Draw(image).rectangle((5, 10, 20, 30), fill="red")
+    output = apply_recipe(image, recipe)
+    red_x = [x for y in range(output.height) for x in range(output.width) if output.getpixel((x, y))[0] > 150 and output.getpixel((x, y))[1] < 80]
+    assert red_x and min(red_x) > 30
+    with pytest.raises(ValueError, match="unknown recipe parameters"):
+        schema.canonicalize({"vertical_mirror": "on"})
+
+
+def test_horizontal_mirror_rejects_directional_text_like_content() -> None:
+    schema = load_filter_space().schema; recipe = schema.canonicalize({"horizontal_mirror": "on"})
+    image = Image.new("RGB", (160, 80), "white"); draw = ImageDraw.Draw(image)
+    for x in range(5, 150, 8): draw.rectangle((x, 20, x + 3, 60), fill="black")
+    with pytest.raises(ValueError, match="directional text"):
+        apply_recipe(image, recipe)
+
+
+def test_six_compatible_active_parameters_are_allowed() -> None:
+    recipe = load_filter_space().schema.canonicalize({"rotation_degrees": 2, "crop_fraction": .02, "offset_x": .02, "brightness": 1.04, "contrast": 1.04, "warmth": .02})
+    assert len([name for name in ("rotation_degrees", "crop_fraction", "offset_x", "brightness", "contrast", "warmth") if recipe.parameters[name] not in (0, 1)]) == 6

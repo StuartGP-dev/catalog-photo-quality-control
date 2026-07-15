@@ -53,6 +53,10 @@ class Candidate:
         )
 
     @property
+    def perceptual_limiting_distance(self) -> int:
+        return int(self.aggregate_metrics.get("variant_limiting_distance", 0))
+
+    @property
     def output_dimensions(self) -> frozenset[tuple[int, int]]:
         return frozenset(
             (
@@ -89,11 +93,11 @@ def select_max_min(
         if not comparison_metrics:
             chosen = max(
                 remaining,
-                key=lambda candidate: (candidate.quality_score, candidate.recipe.recipe_hash),
+                key=lambda candidate: (candidate.perceptual_limiting_distance, candidate.quality_score, candidate.recipe.recipe_hash),
             )
             selection = SelectedCandidate(chosen, None, {})
         else:
-            scored: list[tuple[float, float, float, str, Candidate, Distance]] = []
+            scored: list[tuple[int, float, float, float, str, Candidate, Distance]] = []
             for candidate in remaining:
                 distances = [
                     listing_distance(candidate.aggregate_metrics, metrics)
@@ -108,6 +112,7 @@ def select_max_min(
                 )
                 scored.append(
                     (
+                        candidate.perceptual_limiting_distance,
                         nearest.total
                         + family_bonus
                         - family_representation_penalty * family_share,
@@ -118,7 +123,7 @@ def select_max_min(
                         nearest,
                     )
                 )
-            _, _, _, _, chosen, nearest = max(scored, key=lambda item: item[:4])
+            _, _, _, _, _, chosen, nearest = max(scored, key=lambda item: item[:5])
             selection = SelectedCandidate(chosen, nearest.total, nearest.components)
         selected.append(selection)
         comparison_metrics.append(chosen.aggregate_metrics)
@@ -279,14 +284,14 @@ def select_and_persist(
                         (
                             int(image_verdict.valid),
                             nearest_to_json(image_verdict.nearest),
-                            "{}",
+                            nearest_to_json(image_verdict.original),
                             image_verdict.reference_count,
                             0,
                             selection.candidate.test_id,
                             image_verdict.image_index,
                         ),
                     )
-                    for nearest in image_verdict.neighbors:
+                    for nearest in (image_verdict.original, *image_verdict.neighbors):
                             reference = nearest.reference
                             comparison = nearest.comparison
                             bench_connection.execute(
@@ -346,6 +351,7 @@ def select_and_persist(
                     "diversity_gate_version": str(diversity_config.get("engine_version", "unknown")),
                     "limiting_image_index": None,
                     "limiting_verdict": None,
+                    "variant_limiting_distance": final_diversity.limiting_distance,
                 })
             variant = ListingVariant(
                 None,
@@ -375,7 +381,7 @@ def select_and_persist(
                     "output_width": int(image.metrics.get("output_width", 1)),
                     "output_height": int(image.metrics.get("output_height", 1)),
                     "nearest_same_listing_json": nearest_to_json(final_diversity.images[position].nearest) if final_diversity else image.nearest_same_listing_json,
-                    "nearest_catalog_json": "{}",
+                    "nearest_catalog_json": nearest_to_json(final_diversity.images[position].original) if final_diversity else image.nearest_catalog_json,
                     "reference_count_same_listing": final_diversity.images[position].reference_count if final_diversity else image.reference_count_same_listing,
                     "reference_count_catalog": 0,
                 }

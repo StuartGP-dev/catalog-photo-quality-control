@@ -92,12 +92,29 @@ def _safe_fallback_color(gray: int) -> tuple[tuple[int, int, int], str]:
     return (255, 255, 255), "fallback_white"
 
 
+def _directional_text_likely(image: Image.Image) -> bool:
+    """Conservative local text/logo diagnostic used only to disable mirroring."""
+    gray = np.asarray(ImageOps.grayscale(image).resize((256, 256)), dtype=np.int16)
+    vertical = np.abs(np.diff(gray, axis=1)) > 55
+    horizontal = np.abs(np.diff(gray, axis=0)) > 55
+    edge_density = (vertical.mean() + horizontal.mean()) / 2
+    busy_rows = np.count_nonzero(vertical.mean(axis=1) > 0.14)
+    return bool(edge_density > 0.055 and busy_rows >= 8)
+
+
 def _geometry(
     image: Image.Image,
     parameters: dict[str, object],
     fill_color: tuple[int, int, int],
 ) -> tuple[Image.Image, tuple[int, int], float]:
     width, height = image.size
+    shear_x, shear_y = float(parameters.get("shear_x", 0)), float(parameters.get("shear_y", 0))
+    if shear_x or shear_y:
+        image = image.transform(image.size, Image.Transform.AFFINE, (1, -shear_x, shear_x * width / 2, -shear_y, 1, shear_y * height / 2), Image.Resampling.BICUBIC, fillcolor=fill_color)
+    perspective_x, perspective_y = float(parameters.get("perspective_x", 0)), float(parameters.get("perspective_y", 0))
+    if perspective_x or perspective_y:
+        dx, dy = perspective_x * width, perspective_y * height
+        image = image.transform(image.size, Image.Transform.QUAD, (dx, dy, width-dx, -dy, width+dx, height-dy, -dx, height+dy), Image.Resampling.BICUBIC, fillcolor=fill_color)
     crop_fraction = float(parameters["crop_fraction"])
     if crop_fraction > 0:
         dx, dy = round(width * crop_fraction / 2), round(height * crop_fraction / 2)
@@ -143,6 +160,10 @@ def apply_recipe(image: Image.Image, recipe: Recipe, *, dimension_salt: int = 0)
     """
     p = dict(recipe.parameters)
     result = ImageOps.exif_transpose(image).convert("RGB")
+    if p.get("horizontal_mirror", "off") == "on":
+        if _directional_text_likely(result):
+            raise ValueError("horizontal mirror rejected: directional text or logo detected")
+        result = ImageOps.mirror(result)
 
     result = ImageEnhance.Brightness(result).enhance(float(p["brightness"]))
     result = ImageEnhance.Contrast(result).enhance(float(p["contrast"]))
