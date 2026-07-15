@@ -30,6 +30,14 @@ def test_calibration_html_has_only_existing_relative_assets(tmp_path: Path) -> N
     assert all(not value.startswith(("file:", "/")) for value in parser.values)
     assert all((report.parent / Path(unquote(value))).is_file() for value in parser.values)
     assert {case["verdict"] for case in payload["cases"]} <= {"exact", "same", "near_duplicate", "different"}
+    cases = payload["cases"]
+    verdict_order = {"different": 0, "near_duplicate": 1, "same": 2, "exact": 3}
+    assert cases == sorted(cases, key=lambda row: (verdict_order[row["verdict"]], -row["distance_sum"], -row["phash"]["distance"], -row["dhash"]["distance"], -row["whash"]["distance"]))
+    content = report.read_text(encoding="utf-8")
+    for label in ("Plus différentes d’abord", "Plus similaires d’abord", "20 paires les plus différentes", "20 paires les plus proches", "Paires proches des seuils", "Distribution des verdicts"):
+        assert label in content
+    assert all(f'data-rank="{rank}"' in content for rank in range(1, payload["pair_count"] + 1))
+    assert sum(payload["verdict_counts"].values()) == payload["pair_count"]
 
 
 def test_repository_has_one_perceptual_verdict_engine() -> None:
