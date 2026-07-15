@@ -254,8 +254,6 @@ def select_and_persist(
                 tuple((image.image_index, image.output_path) for image in selection.candidate.images),
                 selection.candidate.recipe_family,
             )
-            from .visual_distance import DISTANCE_METRICS_VERSION
-
             with bench_connection:
                 bench_connection.execute(
                     """UPDATE recipe_tests SET diversity_valid=?,
@@ -264,8 +262,8 @@ def select_and_persist(
                        WHERE test_id=?""",
                     (
                         int(final_diversity.valid),
-                        final_diversity.minimum_same_listing_distance,
-                        final_diversity.minimum_catalog_distance,
+                        None,
+                        None,
                         json.dumps(final_diversity.reasons),
                         ",".join(final_diversity.reasons),
                         ",".join(final_diversity.reasons),
@@ -280,33 +278,36 @@ def select_and_persist(
                            WHERE test_id=? AND image_index=?""",
                         (
                             int(image_verdict.valid),
-                            nearest_to_json(image_verdict.nearest_same_listing),
-                            nearest_to_json(image_verdict.nearest_catalog),
-                            image_verdict.reference_count_same_listing,
-                            image_verdict.reference_count_catalog,
+                            nearest_to_json(image_verdict.nearest),
+                            "{}",
+                            image_verdict.reference_count,
+                            0,
                             selection.candidate.test_id,
                             image_verdict.image_index,
                         ),
                     )
-                    for scope, neighbors in (("listing", image_verdict.same_listing_neighbors), ("catalog", image_verdict.catalog_neighbors)):
-                        for nearest in neighbors:
+                    for nearest in image_verdict.neighbors:
                             reference = nearest.reference
+                            comparison = nearest.comparison
                             bench_connection.execute(
-                            """INSERT OR REPLACE INTO image_pair_distances
+                            """INSERT OR REPLACE INTO perceptual_comparisons
                                (candidate_test_id, candidate_image_index,
                                 reference_listing_id, reference_source_set_hash,
                                 reference_variant_id, reference_image_index,
-                                reference_output_hash, scope, total_distance,
-                                components_json, metrics_version)
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                reference_output_hash, sha256_equal,
+                                phash_distance, phash_band, dhash_distance, dhash_band,
+                                whash_distance, whash_band, verdict, reason, engine_version)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                             (
                                 selection.candidate.test_id, image_verdict.image_index,
                                 reference.listing_id, reference.source_set_hash,
                                 reference.variant_id, reference.image_index,
-                                reference.output_hash, scope,
-                                nearest.distance.total_distance,
-                                json.dumps(nearest.distance.components(), sort_keys=True, separators=(",", ":")),
-                                DISTANCE_METRICS_VERSION,
+                                reference.output_hash, int(comparison.sha256_equal),
+                                comparison.phash.distance, comparison.phash.band,
+                                comparison.dhash.distance, comparison.dhash.band,
+                                comparison.whash.distance, comparison.whash.band,
+                                comparison.verdict, comparison.reason,
+                                str(diversity_config.get("engine_version", "unknown")),
                             ),
                             )
             if not final_diversity.valid:
@@ -317,8 +318,8 @@ def select_and_persist(
                                   diversity_reasons_json=?, error_text=?
                            WHERE test_id=?""",
                         (
-                            final_diversity.minimum_same_listing_distance,
-                            final_diversity.minimum_catalog_distance,
+                            None,
+                            None,
                             json.dumps(final_diversity.reasons),
                             ",".join(final_diversity.reasons),
                             selection.candidate.test_id,
@@ -342,9 +343,9 @@ def select_and_persist(
             if final_diversity:
                 aggregate_metrics.update({
                     "diversity_valid": True,
-                    "minimum_same_listing_distance": final_diversity.minimum_same_listing_distance,
-                    "minimum_catalog_distance": final_diversity.minimum_catalog_distance,
-                    "diversity_gate_version": str(diversity_config.get("metrics_version", "unknown")),
+                    "diversity_gate_version": str(diversity_config.get("engine_version", "unknown")),
+                    "limiting_image_index": None,
+                    "limiting_verdict": None,
                 })
             variant = ListingVariant(
                 None,
@@ -359,9 +360,9 @@ def select_and_persist(
                 minimum_selected_distance=selection.minimum_distance,
                 minimum_distance_components=selection.distance_components,
                 recipe_family=selection.candidate.recipe_family,
-                minimum_same_listing_distance=final_diversity.minimum_same_listing_distance if final_diversity else selection.candidate.aggregate_metrics.get("minimum_same_listing_distance"),
-                minimum_catalog_distance=final_diversity.minimum_catalog_distance if final_diversity else selection.candidate.aggregate_metrics.get("minimum_catalog_distance"),
-                diversity_gate_version=str(diversity_config.get("metrics_version", "unknown")) if final_diversity else str(selection.candidate.aggregate_metrics.get("diversity_gate_version", "legacy")),
+                minimum_same_listing_distance=None,
+                minimum_catalog_distance=None,
+                diversity_gate_version=str(diversity_config.get("engine_version", "unknown")) if final_diversity else str(selection.candidate.aggregate_metrics.get("diversity_gate_version", "legacy")),
                 diversity_valid=final_diversity.valid if final_diversity else bool(selection.candidate.aggregate_metrics.get("diversity_valid", True)),
             )
             image_rows = [
@@ -373,10 +374,10 @@ def select_and_persist(
                     "metrics": image.metrics,
                     "output_width": int(image.metrics.get("output_width", 1)),
                     "output_height": int(image.metrics.get("output_height", 1)),
-                    "nearest_same_listing_json": nearest_to_json(final_diversity.images[position].nearest_same_listing) if final_diversity else image.nearest_same_listing_json,
-                    "nearest_catalog_json": nearest_to_json(final_diversity.images[position].nearest_catalog) if final_diversity else image.nearest_catalog_json,
-                    "reference_count_same_listing": final_diversity.images[position].reference_count_same_listing if final_diversity else image.reference_count_same_listing,
-                    "reference_count_catalog": final_diversity.images[position].reference_count_catalog if final_diversity else image.reference_count_catalog,
+                    "nearest_same_listing_json": nearest_to_json(final_diversity.images[position].nearest) if final_diversity else image.nearest_same_listing_json,
+                    "nearest_catalog_json": "{}",
+                    "reference_count_same_listing": final_diversity.images[position].reference_count if final_diversity else image.reference_count_same_listing,
+                    "reference_count_catalog": 0,
                 }
                 for position, (image, final_path) in enumerate(zip(
                     selection.candidate.images, final_paths, strict=True

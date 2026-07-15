@@ -19,6 +19,10 @@ def test_one_command_initializes_both_databases(tmp_path: Path) -> None:
     assert paths.variants_database.is_file()
     with sqlite3.connect(paths.bench_database) as connection:
         assert connection.execute("SELECT COUNT(*) FROM recipes").fetchone()[0] == 0
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "perceptual_comparisons" in tables and "image_pair_distances" not in tables
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(perceptual_comparisons)")}
+        assert {"sha256_equal", "phash_distance", "phash_band", "dhash_distance", "dhash_band", "whash_distance", "whash_band", "verdict", "reason", "engine_version"} <= columns
     with sqlite3.connect(paths.variants_database) as connection:
         columns = {
             row[1]

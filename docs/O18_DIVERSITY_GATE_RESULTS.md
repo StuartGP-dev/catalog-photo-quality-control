@@ -1,124 +1,24 @@
-# Calibration de la barrière de diversité O18 — 13 juillet 2026
+# O18 perceptual consensus calibration
 
-La calibration a été exécutée **avant toute purge**, en lecture seule, sur les
-150 variantes `ready` (750 images) de O18. Elle a comparé uniquement les images
-de même index. Le rapport est généré sous
-`local/diversity_calibration/O18/fd5c46392c1d-bcec4472ecbf/index.html`.
+Calibration date: 2026-07-15. O18 sources were read only. The generated report
+is ignored under `local/perceptual_calibration/O18/index.html`.
 
-- 56 625 paires intra-annonce calculées ;
-- 750 voisins minimaux, soit un par image rendue ;
-- aucune référence inter-annonces disponible dans la base actuelle ;
-- base SQLite inchangée pendant la calibration ;
-- cinq hashes source identiques à ceux du précédent benchmark.
+The observed full distributions over 55 pairs were:
 
-## Définition du score
+| hash | minimum | median | maximum |
+|---|---:|---:|---:|
+| pHash | 0 | 4 | 32 |
+| dHash | 0 | 4 | 37 |
+| wHash | 0 | 4 | 32 |
 
-La métrique `image-distance-v1` produit un score déterministe borné entre 0 et
-1. Elle combine des signatures RGB 32 × 32 et six composantes normalisées :
+Identical files produced `(0,0,0) / exact`. JPEG recompression produced
+`(0,0..1,0) / same`; light brightness changes `(0,0..2,0..2) / same`; crop and
+zoom mostly `(2..4,2..4,2..4) / same`. Rotation ranged from `same` to
+`near_duplicate`; offsets were `near_duplicate`. Dezoom ranged from
+`near_duplicate` to `different`, with the boundary example `(6,13,18)`.
+Clearly altered images were pHash 28..32 and dHash 27..37, all `different`.
+Other O18 views and the sampled other product were all `different`.
 
-| Composante | Poids général | Définition résumée |
-| --- | ---: | --- |
-| structure | 0,30 | distance issue du SSIM à 32 × 32 et 16 × 16 |
-| luminance | 0,10 | MAE de luminance normalisée |
-| couleur | 0,12 | MAE RGB normalisée |
-| contours | 0,16 | différence des gradients horizontaux et verticaux |
-| géométrie | 0,24 | déplacement du centre et changement d’échelle de la boîte de contenu |
-| canevas | 0,08 | différence de fraction de marge et de couleur de bord |
-
-Des pondérations spécifiques renforcent les composantes couleur/luminance pour
-`appearance_only`, et géométrie/canevas pour les familles de dézoom et les
-combinaisons. Ce score est une barrière interne calibrée ; il ne constitue pas
-une preuve absolue de perception humaine.
-
-## Distribution des voisins minimaux
-
-| Statistique | Distance |
-| --- | ---: |
-| minimum | 0,000648 |
-| p1 | 0,001113 |
-| p5 | 0,001567 |
-| p10 | 0,002222 |
-| médiane | 0,005501 |
-| moyenne | 0,007339 |
-| p90 | 0,013445 |
-| maximum | 0,042533 |
-
-Les index 0 à 4 ont respectivement une moyenne de 0,006891, 0,009551,
-0,007892, 0,005359 et 0,007001. L’index 3 est le plus souvent limitant dans
-le benchmark historique.
-
-## Inspection visuelle et seuils retenus
-
-L’inspection côte à côte, par alternance et avec les cartes de différence du
-rapport donne les zones suivantes :
-
-- 0,003–0,005 : changement généralement quasi imperceptible ;
-- autour de 0,010 : changement visible surtout en comparaison directe ;
-- 0,012–0,015 : cadrage, échelle ou angle clairement perceptible, avec les
-  exemples inspectés encore naturels ;
-- au-delà de 0,03 : différence forte, à contrôler avec les barrières de
-  fidélité existantes.
-
-Le seuil intra-annonce général retenu est **0,012**. Les familles de dézoom et
-de géométrie mixte utilisent respectivement **0,014** et **0,015** ;
-`appearance_only` utilise **0,010**. Sur l’ancien ensemble dense, le seuil
-général 0,012 aurait rejeté 145 variantes sur 150, avec 651 images sous le
-seuil. Cela décrit la redondance de l’ancien ensemble et non le nombre maximal
-de variantes qu’une exploration séquentielle peut construire.
-
-Le seuil catalogue est fixé prudemment à **0,006**, avec des variantes par
-famille entre 0,005 et 0,0075. Il est volontairement inférieur au seuil
-intra-annonce. La base ne contenant aucune autre annonce, ce seuil n’a pas pu
-être validé sur des paires inter-annonces réelles et devra être recalibré dès
-qu’un corpus multi-annonces représentatif sera disponible.
-
-## Réglage de l’espace de recherche
-
-Les transformations géométriques sont davantage privilégiées : rotation
-0,8–1,8°, crop 0,8–2 %, zoom 1,01–1,03, offsets 0,8–1,8 % et dézoom 2–5 % avec
-canevas obligatoire. Les plages de luminosité, saturation, chaleur et teinte
-n’ont pas été renforcées. Les contrôles de fidélité, de netteté, clipping,
-proportions, fond et visibilité complète du produit restent indépendants et
-continuent de s’appliquer avant la barrière de diversité.
-
-## Benchmark définitif
-
-Le run définitif `20260713T195045-da32475e` applique la barrière dans les deux
-sens : un nouveau candidat doit respecter son seuil et ne doit pas faire passer
-un variant déjà `ready` sous le seuil propre à la famille de ce dernier. La
-génération a duré 20 minutes ; rendu, sélection exacte et rapport ont porté la
-durée totale à 1 553,5 secondes.
-
-- 570 propositions, dont 138 reprises de cache ;
-- 464 rendus fidèles et 44 rejets comptabilisés pour proximité ;
-- 23 variants `ready`, tous complets avec cinq images ;
-- 9 apparence, 1 crop, 5 dézoom + canevas, 1 géométrie mixte, 5 rotations et
-  2 zooms ;
-- 45 images avec canevas : 15 bandes latérales, 15 gris clair, 10 fonds
-  échantillonnés et 5 bords échantillonnés ; aucun fond sombre ou saturé ;
-- aucun offset seul n'a survécu aux contrôles dans la fenêtre de 20 minutes.
-
-L'audit final recalculé sur disque contient 2 645 comparaisons dirigées et 115
-voisins minimaux. Il trouve **zéro violation** de la configuration, zéro
-référence manquante et zéro violation de clé étrangère. La distance minimale
-par index est 0,011047 (index 0), 0,013724 (index 1), 0,012056 (index 2),
-0,010356 (index 3) et 0,013819 (index 4). La distribution globale des voisins
-minimaux est : minimum 0,010356, moyenne 0,032232, médiane 0,023118 et maximum
-0,246332.
-
-Par rapport aux 150 variantes précédentes, la moyenne des voisins minimaux
-passe de 0,007339 à 0,032232 et la médiane de 0,005501 à 0,023118. Le nouvel
-ensemble est beaucoup moins dense ; la cible de 150 n'a pas été forcée.
-
-Les métriques de fidélité finales sont : SSIM direct minimal par variant
-0,7586 / 0,9172 / 0,9991 (minimum/moyenne/maximum), pixel MAE moyen
-0,00434 / 0,01646 / 0,03064 et luminance MAE moyenne
-0,00380 / 0,01631 / 0,03053. Le SSIM direct bas des transformations
-géométriques reste accompagné du garde-fou SSIM multi-échelle, de la netteté,
-du clipping et des limites MAE.
-
-Rapports locaux :
-
-- calibration : `local/diversity_calibration/O18/fd5c46392c1d-bcec4472ecbf/index.html` ;
-- benchmark : `local/bench_runs/O18/20260713T195045-da32475e/index.html` ;
-- audit exact : `local/diversity_audits/O18-final/index.html`.
+The retained corpus-specific bands are strong <= 4, review <= 10, then weak
+<= 16 for pHash/dHash and <= 18 for wHash. These are initial O18 calibration
+values, not universal perceptual thresholds.

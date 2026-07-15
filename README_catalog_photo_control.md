@@ -161,28 +161,19 @@ python .\metadata_privacy_two_images.py image1.jpg image2.jpg `
 powershell -ExecutionPolicy Bypass -File .\scripts\clean_generated_artifacts.ps1 -WhatIfOnly
 powershell -ExecutionPolicy Bypass -File .\scripts\clean_generated_artifacts.ps1
 ```
-# Barrière de diversité visuelle
+# Barrière de similarité perceptuelle
 
-Le benchmark contrôle séparément la fidélité à la source et la distance entre
-images rendues. Chaque image candidate est comparée uniquement aux références
-du même `image_index`, dans l'annonce et dans le catalogue selon
-`diversity_gate.scope`. Une seule image sous le seuil rejette le variant
-complet avant la sélection max-min.
+Le benchmark contrôle séparément la fidélité à la source et la similarité aux
+variantes finales. Chaque sortie candidate est comparée uniquement aux images
+`ready` du même `image_index`. SHA-256 détecte l'identité stricte ; pHash,
+dHash et wHash 64 bits fournissent un verdict par consensus. Un seul verdict
+`exact`, `same` ou `near_duplicate` rejette atomiquement le variant complet
+avant toute sélection max-min.
 
-Calibration en lecture seule de la base actuelle :
+Calibration courte en lecture seule des sources :
 
 ```powershell
-python -m common.catalog_photo_control.calibrate `
+python -m common.catalog_photo_control.perceptual_calibration `
   --listing "C:\Users\yanis\Documents\Code\Bot-Vinted\annonces\bijoux\O\O18" `
-  --calibrate-diversity-gate `
-  --distance-scope both
-```
-
-Audit en lecture seule avec rapport :
-
-```powershell
-python -m common.catalog_photo_control.audit_diversity `
-  --scope both `
-  --top-nearest 100 `
-  --html "local/diversity_audits/latest/index.html"
+  --output "local\perceptual_calibration\O18"
 ```

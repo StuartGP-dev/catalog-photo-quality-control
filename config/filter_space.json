@@ -20,30 +20,19 @@
   "selection_pool_multiplier": 3,
   "diversity_gate": {
     "enabled": true,
-    "scope": "both",
     "compare_same_image_index_only": true,
     "include_ready_variants": true,
-    "include_source_images": true,
-    "minimum_same_listing_distance": 0.012,
-    "minimum_catalog_distance": 0.006,
     "reject_complete_variant_on_single_image_failure": true,
-    "metrics_version": "image-distance-v1",
-    "nearest_neighbors_to_persist": 5,
-    "weights": {"structural": 0.3, "luminance": 0.1, "color": 0.12, "edge": 0.16, "geometry": 0.24, "canvas": 0.08},
-    "family_thresholds": {
-      "appearance_only": {"minimum_same_listing_distance": 0.01, "minimum_catalog_distance": 0.005},
-      "rotation_family": {"minimum_same_listing_distance": 0.012, "minimum_catalog_distance": 0.006},
-      "crop_family": {"minimum_same_listing_distance": 0.012, "minimum_catalog_distance": 0.006},
-      "zoom_family": {"minimum_same_listing_distance": 0.012, "minimum_catalog_distance": 0.006},
-      "dezoom_canvas_family": {"minimum_same_listing_distance": 0.014, "minimum_catalog_distance": 0.007},
-      "offset_family": {"minimum_same_listing_distance": 0.012, "minimum_catalog_distance": 0.006},
-      "mixed_geometry_family": {"minimum_same_listing_distance": 0.015, "minimum_catalog_distance": 0.0075}
+    "engine_version": "perceptual-consensus-o18-v1",
+    "hash_size": 8,
+    "band_limits": {
+      "phash": {"strong": 4, "review": 10, "weak": 16},
+      "dhash": {"strong": 4, "review": 10, "weak": 16},
+      "whash": {"strong": 4, "review": 10, "weak": 18}
     },
-    "family_weights": {
-      "appearance_only": {"structural": 0.28, "luminance": 0.18, "color": 0.2, "edge": 0.2, "geometry": 0.1, "canvas": 0.04},
-      "dezoom_canvas_family": {"structural": 0.25, "luminance": 0.07, "color": 0.08, "edge": 0.14, "geometry": 0.28, "canvas": 0.18},
-      "mixed_geometry_family": {"structural": 0.27, "luminance": 0.07, "color": 0.08, "edge": 0.15, "geometry": 0.3, "canvas": 0.13}
-    }
+    "reject_verdicts": ["exact", "same", "near_duplicate"],
+    "consensus": {"same_strong_count": 3, "near_strong_count": 2, "near_review_count": 2},
+    "nearest_neighbors_to_persist": 3
   },
   "geometry_template_probability": 0.78,
   "parameters": {

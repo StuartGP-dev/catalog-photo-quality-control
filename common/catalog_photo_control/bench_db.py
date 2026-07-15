@@ -123,8 +123,8 @@ CREATE TABLE IF NOT EXISTS recipe_pair_distances (
     CHECK(test_a < test_b),
     UNIQUE(listing_id, source_set_hash, test_a, test_b)
 );
-CREATE TABLE IF NOT EXISTS image_pair_distances (
-    distance_id INTEGER PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS perceptual_comparisons (
+    comparison_id INTEGER PRIMARY KEY,
     candidate_test_id INTEGER NOT NULL REFERENCES recipe_tests(test_id) ON DELETE CASCADE,
     candidate_image_index INTEGER NOT NULL CHECK(candidate_image_index >= 0),
     reference_listing_id TEXT NOT NULL,
@@ -132,15 +132,21 @@ CREATE TABLE IF NOT EXISTS image_pair_distances (
     reference_variant_id INTEGER,
     reference_image_index INTEGER NOT NULL,
     reference_output_hash TEXT NOT NULL,
-    scope TEXT NOT NULL CHECK(scope IN ('listing', 'catalog')),
-    total_distance REAL NOT NULL CHECK(total_distance >= 0 AND total_distance <= 1),
-    components_json TEXT NOT NULL,
-    metrics_version TEXT NOT NULL,
+    sha256_equal INTEGER NOT NULL CHECK(sha256_equal IN (0, 1)),
+    phash_distance INTEGER NOT NULL CHECK(phash_distance BETWEEN 0 AND 64),
+    phash_band TEXT NOT NULL,
+    dhash_distance INTEGER NOT NULL CHECK(dhash_distance BETWEEN 0 AND 64),
+    dhash_band TEXT NOT NULL,
+    whash_distance INTEGER NOT NULL CHECK(whash_distance BETWEEN 0 AND 64),
+    whash_band TEXT NOT NULL,
+    verdict TEXT NOT NULL CHECK(verdict IN ('exact','same','near_duplicate','different')),
+    reason TEXT NOT NULL,
+    engine_version TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(candidate_test_id, candidate_image_index, reference_output_hash, scope)
+    UNIQUE(candidate_test_id, candidate_image_index, reference_output_hash)
 );
-CREATE INDEX IF NOT EXISTS idx_image_pair_candidate
-    ON image_pair_distances(candidate_test_id, candidate_image_index, scope, total_distance);
+CREATE INDEX IF NOT EXISTS idx_perceptual_candidate
+    ON perceptual_comparisons(candidate_test_id, candidate_image_index, verdict);
 CREATE TABLE IF NOT EXISTS recipe_global_stats (
     recipe_id INTEGER PRIMARY KEY REFERENCES recipes(recipe_id) ON DELETE CASCADE,
     tested_count INTEGER NOT NULL DEFAULT 0,
@@ -186,6 +192,10 @@ class BenchDatabase:
 
     def initialize(self) -> None:
         self.connection.executescript(SCHEMA)
+        # image_pair_distances stored obsolete image-distance-v1 weighted scores.
+        # They cannot be migrated into raw perceptual hashes and are intentionally
+        # discarded; recipe tests remain preserved and are cache-separated by config.
+        self.connection.execute("DROP TABLE IF EXISTS image_pair_distances")
         for table, column in (("bench_runs", "evaluation_config_hash"), ("recipe_tests", "evaluation_config_hash")):
             columns = {row[1] for row in self.connection.execute(f"PRAGMA table_info({table})")}
             if column not in columns:
@@ -607,12 +617,10 @@ class BenchDatabase:
                 )
                 aggregate.update({
                     "diversity_valid": diversity.valid,
-                    "diversity_gate_version": str(diversity_config.get("metrics_version", "unknown")),
-                    "minimum_same_listing_distance": diversity.minimum_same_listing_distance,
-                    "minimum_catalog_distance": diversity.minimum_catalog_distance,
+                    "diversity_gate_version": str(diversity_config.get("engine_version", "unknown")),
                     "diversity_reasons": list(diversity.reasons),
-                    "minimum_same_listing_threshold": float(diversity_config.get("family_thresholds", {}).get(recipe_family, {}).get("minimum_same_listing_distance", diversity_config.get("minimum_same_listing_distance", 0))),
-                    "minimum_catalog_threshold": float(diversity_config.get("family_thresholds", {}).get(recipe_family, {}).get("minimum_catalog_distance", diversity_config.get("minimum_catalog_distance", 0))),
+                    "limiting_image_index": next((row.image_index for row in diversity.images if not row.valid), None),
+                    "limiting_verdict": next((row.nearest.comparison.verdict for row in diversity.images if not row.valid and row.nearest), None),
                 })
             else:
                 aggregate["diversity_valid"] = True
@@ -627,16 +635,10 @@ class BenchDatabase:
                     "output_width": output.width,
                     "output_height": output.height,
                     "diversity_valid": diversity.images[position].valid if diversity else True,
-                    "nearest_same_listing_json": (
-                        nearest_to_json(diversity.images[position].nearest_same_listing)
-                        if diversity else "{}"
-                    ),
-                    "nearest_catalog_json": (
-                        nearest_to_json(diversity.images[position].nearest_catalog)
-                        if diversity else "{}"
-                    ),
-                    "reference_count_same_listing": diversity.images[position].reference_count_same_listing if diversity else 0,
-                    "reference_count_catalog": diversity.images[position].reference_count_catalog if diversity else 0,
+                    "nearest_same_listing_json": nearest_to_json(diversity.images[position].nearest) if diversity else "{}",
+                    "nearest_catalog_json": "{}",
+                    "reference_count_same_listing": diversity.images[position].reference_count if diversity else 0,
+                    "reference_count_catalog": 0,
                 }
                 for position, (output, metrics) in enumerate(zip(rendered.images, metric_rows, strict=True))
             ]
@@ -660,32 +662,30 @@ class BenchDatabase:
                 evaluation_config_hash=evaluation_config_hash,
             )
             if diversity:
-                from .visual_distance import DISTANCE_METRICS_VERSION
-
                 with self.connection:
                     for image_verdict in diversity.images:
-                        for scope, neighbors in (
-                            ("listing", image_verdict.same_listing_neighbors),
-                            ("catalog", image_verdict.catalog_neighbors),
-                        ):
-                            for nearest in neighbors:
+                        for nearest in image_verdict.neighbors:
                                 reference = nearest.reference
+                                comparison = nearest.comparison
                                 self.connection.execute(
-                                """INSERT OR REPLACE INTO image_pair_distances
+                                """INSERT OR REPLACE INTO perceptual_comparisons
                                    (candidate_test_id, candidate_image_index,
                                     reference_listing_id, reference_source_set_hash,
                                     reference_variant_id, reference_image_index,
-                                    reference_output_hash, scope, total_distance,
-                                    components_json, metrics_version)
-                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                    reference_output_hash, sha256_equal,
+                                    phash_distance, phash_band, dhash_distance, dhash_band,
+                                    whash_distance, whash_band, verdict, reason, engine_version)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                                 (
                                     test_id, image_verdict.image_index,
                                     reference.listing_id, reference.source_set_hash,
                                     reference.variant_id, reference.image_index,
-                                    reference.output_hash, scope,
-                                    nearest.distance.total_distance,
-                                    canonical_json(nearest.distance.components()),
-                                    DISTANCE_METRICS_VERSION,
+                                    reference.output_hash, int(comparison.sha256_equal),
+                                    comparison.phash.distance, comparison.phash.band,
+                                    comparison.dhash.distance, comparison.dhash.band,
+                                    comparison.whash.distance, comparison.whash.band,
+                                    comparison.verdict, comparison.reason,
+                                    str(diversity_config.get("engine_version", "unknown")),
                                 ),
                                 )
             refresh_recipe_statistics(self.connection, self.recipe_id(recipe))
