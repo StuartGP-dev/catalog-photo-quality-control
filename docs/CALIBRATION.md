@@ -8,9 +8,12 @@ sources.
 Le rapport possède une revue humaine hors ligne. Chaque recette peut être
 acceptée, refusée ou marquée « à revoir », avec une note facultative. Les choix
 sont conservés dans le stockage local du navigateur et le bouton
-`Exporter mes choix JSON` télécharge un fichier autonome à transmettre pour la
+`Sauvegarder mes choix` télécharge immédiatement un fichier JSON autonome à transmettre pour la
 calibration ultérieure des limites. Ce fichier n'est jamais appliqué
 automatiquement aux seuils de production.
+
+La comparaison principale ne mélange plus les deux images : l'originale
+complète est affichée à gauche et la photo filtrée complète à droite.
 
 L'enveloppe exploratoire couvre volontairement jusqu'à ±8° de rotation, 12 %
 de crop, zoom 1,20, dézoom 20 % et offsets ±12 %. Une classification automatique

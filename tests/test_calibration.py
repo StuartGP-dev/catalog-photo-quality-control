@@ -164,14 +164,16 @@ def test_calibration_run_is_isolated_resumable_and_report_is_exhaustive(
     assert source_before == {path.name: path.read_bytes() for path in listing.iterdir()}
     content = report.read_text(encoding="utf-8")
     for expected in (
-        "Original / variant", "Alternance", "Avant/après", "Zoom 100 %",
         "Différence amplifiée", "Crop central", "Bords original / variant",
         "Boîte du contenu", "Recette canonique neutralisée", "Fond détecté",
         "very_subtle", "perceptible_candidate", "strong_candidate", "rejected",
-        "Exporter mes choix JSON", "Accepter", "Refuser", "À revoir",
+        "Sauvegarder mes choix", "Originale", "Photo filtrée",
+        "Accepter", "Refuser", "À revoir",
         "localStorage", "human_filter_choices_",
     ):
         assert expected in content
+    assert 'class="overlay"' not in content
+    assert 'class="slider"' not in content
     manifest = json.loads(manifest_before)
     assert manifest["html_count"] == 1
     assert manifest["example_count"] == sum(row["examples"] for row in summary.values())
