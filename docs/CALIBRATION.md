@@ -19,6 +19,12 @@ L'enveloppe exploratoire couvre volontairement jusqu'à ±8° de rotation, 12 %
 de crop, zoom 1,20, dézoom 20 % et offsets ±12 %. Une classification automatique
 rouge ne masque pas le rendu : elle aide seulement la revue humaine.
 
+La campagne de revue v3 repart avec un stockage de décisions vide. Une recette
+n'est proposée à la revue que si ses cinq images sont `different` de leurs
+originales et si la distance limitante `pHash + dHash + wHash` est au moins
+40 sur 192. Ce seuil interne conservateur a gardé 21 des 302 recettes O18 ; il
+ne représente le seuil d'aucune plateforme externe.
+
 ```powershell
 python -m common.catalog_photo_control.calibrate `
   --listing "C:\catalogue\bijoux\O\O18" `

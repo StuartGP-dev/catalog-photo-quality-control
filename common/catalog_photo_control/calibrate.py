@@ -18,12 +18,14 @@ from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageOps
 
 from .config import load_filter_space
 from .image_pipeline import RenderedVariant, render_listing
+from .image_similarity import compare_images
 from .metrics import aggregate_metrics, image_metrics
 from .models import Recipe, SourceListing, canonical_json, stable_hash
 from .source_loader import load_source_listing, resolve_listing_reference
 
 
-CALIBRATION_VERSION = "visual-human-review-v2"
+CALIBRATION_VERSION = "visual-human-review-v3-distance-40"
+MINIMUM_REVIEW_RANKING_DISTANCE = 40
 CANVAS_MODES = (
     "white",
     "light_gray",
@@ -383,15 +385,35 @@ def _execute_spec(listing: SourceListing, spec: CalibrationSpec, examples_root: 
     rows: list[Mapping[str, object]] = []
     for source, output in zip(listing.images, rendered.images, strict=True):
         metrics = image_metrics(source.path, output.output_path, output.canvas_metadata)
+        comparison = compare_images(source.path, output.output_path)
+        metrics.update({
+            "phash_distance": comparison.phash.distance,
+            "dhash_distance": comparison.dhash.distance,
+            "whash_distance": comparison.whash.distance,
+            "ranking_distance": comparison.phash.distance + comparison.dhash.distance + comparison.whash.distance,
+            "perceptual_verdict": comparison.verdict,
+        })
         metrics.update(_geometry_diagnostics(source.path, output.output_path, output.canvas_metadata, spec))
         asset_dir = destination / "inspection" / f"image_{source.index:04d}"
         assets = _difference_assets(source.path, output.output_path, output.canvas_metadata, asset_dir)
         metrics["inspection_assets"] = assets
         rows.append(metrics)
     aggregate = aggregate_metrics(rows)
+    limiting_distance = min(int(row["ranking_distance"]) for row in rows)
+    perceptual_review_eligible = all(
+        row["perceptual_verdict"] == "different" for row in rows
+    ) and limiting_distance >= MINIMUM_REVIEW_RANKING_DISTANCE
     intensity = _normalized_intensity(spec)
     classification, reasons = classify_calibration(spec.family, intensity, rows)
-    aggregate = {**aggregate, "intensity": intensity, "classification": classification, "rejection_reasons": list(reasons)}
+    aggregate = {
+        **aggregate,
+        "intensity": intensity,
+        "classification": classification,
+        "rejection_reasons": list(reasons),
+        "perceptual_review_eligible": perceptual_review_eligible,
+        "variant_limiting_ranking_distance": limiting_distance,
+        "minimum_review_ranking_distance": MINIMUM_REVIEW_RANKING_DISTANCE,
+    }
     return CalibrationResult(spec, recipe, destination, rendered, tuple(rows), aggregate, classification, reasons)
 
 
@@ -436,12 +458,13 @@ def _write_report(path: Path, listing: SourceListing, config_hash: str, results:
                 <figure><img src="{html.escape(_relative(asset_root / str(assets['edges']), path.parent))}" alt="edge crops"><figcaption>Bords original / variant</figcaption></figure>
                 <figure><img src="{html.escape(_relative(asset_root / str(assets['content_box']), path.parent))}" alt="content box"><figcaption>Boîte du contenu</figcaption></figure></div>
                 <p>SSIM {_fmt(metrics['ssim'])} · pixel MAE {_fmt(metrics['pixel_mae'])} · luminance MAE {_fmt(metrics['luminance_mae'])} · netteté {_fmt(metrics['sharpness_ratio'])} · clipping {_fmt(metrics['clip_fraction'])}</p>
+                <p>Perceptuel : pHash {metrics['phash_distance']}/64 · dHash {metrics['dhash_distance']}/64 · wHash {metrics['whash_distance']}/64 · somme {metrics['ranking_distance']} · verdict <strong>{metrics['perceptual_verdict']}</strong></p>
                 <p>Dimensions {int(metrics['output_width'])}×{int(metrics['output_height'])} · canvas_fraction {_fmt(metrics['canvas_fraction'])} · foreground_scale_ratio {_fmt(metrics['foreground_scale_ratio'])}</p>
                 <p>Fond détecté {html.escape(str(metrics.get('detected_background_rgb', metrics.get('sampled_background_rgb', 'n/a'))))} · utilisé {html.escape(str(metrics.get('background_rgb', 'n/a')))} · origine {html.escape(str(metrics.get('background_origin', 'n/a')))} · confiance {_fmt(metrics.get('sampled_background_confidence', 'n/a'))} · fallback {html.escape(str(metrics.get('sampled_background_fallback_used', 'n/a')))} ({html.escape(str(metrics.get('fallback_origin', 'none')))})</p></article>''')
             recipe_json = html.escape(json.dumps(result.recipe.parameters, indent=2, ensure_ascii=False))
             cards.append(f'''<article class="example {result.classification}" data-review-key="{result.spec.key}" data-family="{html.escape(result.spec.family)}" data-parameters="{html.escape(canonical_json(result.spec.parameters))}"><h3>{html.escape(result.spec.branch)} · {result.spec.stage} · intensité {_fmt(_normalized_intensity(result.spec))}</h3>
             <p class="badge">{result.classification}</p><p>Paramètres exacts : <code>{html.escape(canonical_json(result.spec.parameters))}</code></p>
-            <p>Agrégat : min SSIM {_fmt(result.aggregate.get('min_ssim'))} · max pixel MAE {_fmt(result.aggregate.get('max_pixel_mae'))} · max luminance MAE {_fmt(result.aggregate.get('max_luminance_mae'))} · raisons {html.escape(', '.join(result.rejection_reasons) or 'aucune')}</p>
+            <p>Agrégat : min SSIM {_fmt(result.aggregate.get('min_ssim'))} · max pixel MAE {_fmt(result.aggregate.get('max_pixel_mae'))} · max luminance MAE {_fmt(result.aggregate.get('max_luminance_mae'))} · distance perceptuelle limitante <strong>{result.aggregate.get('variant_limiting_ranking_distance')}</strong> (minimum interne {MINIMUM_REVIEW_RANKING_DISTANCE}) · raisons {html.escape(', '.join(result.rejection_reasons) or 'aucune')}</p>
             <div class="review"><button type="button" data-decision="accepted">Accepter</button><button type="button" data-decision="rejected">Refuser</button><button type="button" data-decision="unsure">À revoir</button><input class="review-note" placeholder="Note facultative"><strong class="review-state">Non évalué</strong></div>
             <details><summary>Recette canonique neutralisée</summary><pre>{recipe_json}</pre></details>{''.join(image_cards)}</article>''')
         sections.append(f'<section><h2>{html.escape(family)}</h2>{"".join(cards)}</section>')
@@ -504,6 +527,14 @@ def run_calibration(args: argparse.Namespace) -> tuple[Path, dict[str, object]]:
         family_results = [result for result in results if result.spec.family == family and result.spec.stage == "coarse"]
         for lower, upper in _transition_pairs(family_results):
             results.extend(_execute_spec(listing, spec, run_dir / "examples") for spec in deterministic_bisection(lower, upper, args.bisection_steps))
+    rejected_directories = [
+        result.directory
+        for result in results
+        if not result.aggregate["perceptual_review_eligible"]
+    ]
+    results = [result for result in results if result.aggregate["perceptual_review_eligible"]]
+    for directory in rejected_directories:
+        shutil.rmtree(directory, ignore_errors=True)
     _write_report(report, listing, config_hash, results)
     summary = _summary(results)
     result_rows = [

@@ -17,6 +17,7 @@ from common.catalog_photo_control.calibrate import (
     generate_coarse_specs,
     neutral_parameters,
     run_calibration,
+    MINIMUM_REVIEW_RANKING_DISTANCE,
 )
 from common.catalog_photo_control.image_pipeline import apply_recipe
 
@@ -190,3 +191,4 @@ def test_calibration_hash_changes_with_effective_configuration() -> None:
     assert first == calibration_config_hash(("rotation",), 6, 4)
     assert first != calibration_config_hash(("rotation",), 7, 4)
     assert first != calibration_config_hash(("crop",), 6, 4)
+    assert MINIMUM_REVIEW_RANKING_DISTANCE == 40
