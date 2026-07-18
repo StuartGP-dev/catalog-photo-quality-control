@@ -32,6 +32,9 @@ def test_metadata_diagnostic_is_read_only_and_report_assets_exist(tmp_path: Path
     assert "original_vs_additional_01" in payload["pair_comparisons"]
     content = report.read_text(encoding="utf-8")
     assert "Similitudes" in content and "Différences" in content
+    assert "Tableau comparatif complet" in content
+    assert "Résumé simplifié des comparaisons visuelles" in content
+    assert "pHash" in content and "dHash" in content and "wHash" in content
     assert (report.parent / "assets" / "original.jpg").is_file()
     assert (report.parent / "assets" / "filtered.jpg").is_file()
     assert (report.parent / "assets" / "additional_01.jpg").is_file()

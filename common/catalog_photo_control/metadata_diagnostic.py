@@ -177,6 +177,46 @@ def _table_rows(values: Mapping[str, Any]) -> str:
     )
 
 
+def _flatten_metadata(values: Mapping[str, Any], prefix: str = "") -> dict[str, Any]:
+    flattened: dict[str, Any] = {}
+    for key, value in values.items():
+        name = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, Mapping):
+            flattened.update(_flatten_metadata(value, name))
+        else:
+            flattened[name] = value
+    return flattened
+
+
+def _comparison_matrix(images: Sequence[tuple[str, Mapping[str, Any]]]) -> str:
+    flattened = [(label, _flatten_metadata(metadata)) for label, metadata in images]
+    keys = sorted({key for _, values in flattened for key in values})
+    header = "".join(f"<th>{html.escape(label)}</th>" for label, _ in flattened)
+    rows = []
+    for key in keys:
+        cells = []
+        for _, values in flattened:
+            value = values.get(key, "—")
+            cells.append(f"<td><pre>{html.escape(json.dumps(value, ensure_ascii=False))}</pre></td>")
+        rows.append(f"<tr><th>{html.escape(key)}</th>{''.join(cells)}</tr>")
+    return f"<thead><tr><th>Propriété</th>{header}</tr></thead><tbody>{''.join(rows)}</tbody>"
+
+
+def _visual_summary_rows(comparisons: Mapping[str, Any]) -> str:
+    return "".join(
+        "<tr>"
+        f"<th>{html.escape(name.replace('_', ' '))}</th>"
+        f"<td>{'oui' if values['visual_similarity']['sha256_equal'] else 'non'}</td>"
+        f"<td>{values['visual_similarity']['phash']['distance']}/64</td>"
+        f"<td>{values['visual_similarity']['dhash']['distance']}/64</td>"
+        f"<td>{values['visual_similarity']['whash']['distance']}/64</td>"
+        f"<td><strong>{html.escape(values['visual_similarity']['verdict'])}</strong></td>"
+        f"<td>{html.escape(values['visual_similarity']['reason'])}</td>"
+        "</tr>"
+        for name, values in comparisons.items()
+    )
+
+
 def generate_metadata_report(
     original_path: str | Path,
     filtered_path: str | Path,
@@ -220,6 +260,9 @@ def generate_metadata_report(
                 "metadata": compare_metadata(left_metadata, right_metadata),
                 "visual_similarity": compare_images(left_path, right_path).as_dict(),
             }
+    matrix_images = [("Originale O18", original), ("Variante filtrée", filtered)] + [
+        (source.name, metadata) for source, metadata in zip(additional_sources, additional_images)
+    ]
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "original": original,
@@ -240,6 +283,8 @@ def generate_metadata_report(
 body{{font:14px system-ui;background:#f3f4f6;color:#111827;margin:1.5rem}}main{{max-width:1500px;margin:auto}}section{{background:white;padding:1rem;margin:1rem 0;border-radius:10px}}.images{{display:grid;grid-template-columns:1fr 1fr;gap:1rem}}figure{{margin:0}}img{{width:100%;height:520px;object-fit:contain;background:#eee}}table{{width:100%;border-collapse:collapse}}th,td{{border:1px solid #d1d5db;padding:.5rem;text-align:left;vertical-align:top}}th{{width:25%}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;margin:0}}@media(max-width:850px){{.images{{grid-template-columns:1fr}}}}</style></head><body><main>
 <h1>Diagnostic comparé des métadonnées</h1><p>Lecture seule : aucun fichier source n'a été modifié. Les dates du système de fichiers sont affichées séparément des métadonnées intégrées.</p>
 <section class="images"><figure><figcaption><strong>Originale O18 image 0</strong></figcaption><img src="{html.escape(original_asset.relative_to(destination).as_posix())}" alt="originale"></figure><figure><figcaption><strong>Variante filtrée</strong></figcaption><img src="{html.escape(filtered_asset.relative_to(destination).as_posix())}" alt="filtrée"></figure>{''.join(f'<figure><figcaption><strong>{html.escape(source.name)}</strong></figcaption><img src="{html.escape(asset.relative_to(destination).as_posix())}" alt="photo supplémentaire"></figure>' for source, asset in zip(additional_sources, additional_assets))}</section>
+<section><h2>Résumé simplifié des comparaisons visuelles</h2><p>Une distance de 0/64 signifie que le hash perceptuel voit les images comme identiques. Le SHA-256 exige que les fichiers soient strictement identiques octet par octet.</p><table><thead><tr><th>Paire</th><th>SHA identique</th><th>pHash</th><th>dHash</th><th>wHash</th><th>Verdict</th><th>Explication</th></tr></thead><tbody>{_visual_summary_rows(pair_comparisons)}</tbody></table></section>
+<section><h2>Tableau comparatif complet</h2><p>Toutes les propriétés détectées sont réunies ici. « — » signifie que la propriété n'existe pas dans ce fichier. Les sections suivantes conservent la représentation technique détaillée.</p><table>{_comparison_matrix(matrix_images)}</table></section>
 <section><h2>Similitudes</h2><table>{_table_rows(comparison['similarities'])}</table></section>
 <section><h2>Différences</h2><table>{_table_rows(comparison['differences'])}</table></section>
 {''.join(f'<section><h2>{html.escape(name.replace("_", " "))}</h2><h3>Comparaison visuelle</h3><table>{_table_rows(values["visual_similarity"])}</table><h3>Similitudes</h3><table>{_table_rows(values["metadata"]["similarities"])}</table><h3>Différences</h3><table>{_table_rows(values["metadata"]["differences"])}</table></section>' for name, values in pair_comparisons.items())}
