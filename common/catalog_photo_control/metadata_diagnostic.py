@@ -10,10 +10,12 @@ import struct
 from io import BytesIO
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from PIL import ExifTags, Image, ImageCms, ImageOps
 from PIL.IptcImagePlugin import getiptcinfo
+
+from .image_similarity import compare_images
 
 
 def _sha256(path: Path) -> str:
@@ -96,10 +98,23 @@ def inspect_image_metadata(path: str | Path) -> dict[str, Any]:
         raise FileNotFoundError(source)
     stat = source.stat()
     with Image.open(source) as opened:
+        raw_exif = opened.getexif()
         exif = {
             ExifTags.TAGS.get(tag, str(tag)): _safe(value)
-            for tag, value in opened.getexif().items()
+            for tag, value in raw_exif.items()
         }
+        exif_ifds: dict[str, Any] = {}
+        for ifd_name in ("Exif", "GPSInfo", "Interop", "IFD1"):
+            ifd_id = getattr(ExifTags.IFD, ifd_name, None)
+            if ifd_id is None:
+                continue
+            try:
+                values = raw_exif.get_ifd(ifd_id)
+            except (KeyError, OSError, TypeError, ValueError):
+                continue
+            names = ExifTags.GPSTAGS if ifd_name == "GPSInfo" else ExifTags.TAGS
+            if values:
+                exif_ifds[ifd_name] = {names.get(tag, str(tag)): _safe(value) for tag, value in values.items()}
         embedded = {
             str(key): _safe(value)
             for key, value in opened.info.items()
@@ -127,12 +142,14 @@ def inspect_image_metadata(path: str | Path) -> dict[str, Any]:
             "orientation_normalized_width": normalized_size[0],
             "orientation_normalized_height": normalized_size[1],
             "exif": exif,
+            "exif_ifds": exif_ifds,
             "embedded_info": embedded,
             "icc_profile": _icc_details(icc),
             "iptc": _safe(iptc) if iptc else None,
             "jpeg_quantization_tables": len(quantization or {}),
             "jpeg_segments": _jpeg_segments(source),
             "alternate_data_streams": _alternate_streams(source),
+            "frame_count": int(getattr(opened, "n_frames", 1)),
         }
 
 
@@ -164,7 +181,7 @@ def generate_metadata_report(
     original_path: str | Path,
     filtered_path: str | Path,
     output_dir: str | Path,
-    additional_path: str | Path | None = None,
+    additional_path: str | Path | Sequence[str | Path] | None = None,
 ) -> tuple[Path, Path]:
     original_source = Path(original_path).resolve()
     filtered_source = Path(filtered_path).resolve()
@@ -176,26 +193,41 @@ def generate_metadata_report(
     filtered_asset = assets / f"filtered{filtered_source.suffix.lower()}"
     shutil.copy2(original_source, original_asset)
     shutil.copy2(filtered_source, filtered_asset)
-    additional_source = Path(additional_path).resolve() if additional_path else None
-    additional_asset = assets / f"additional{additional_source.suffix.lower()}" if additional_source else None
-    if additional_source:
-        shutil.copy2(additional_source, additional_asset)
+    if additional_path is None:
+        additional_sources: list[Path] = []
+    elif isinstance(additional_path, (str, Path)):
+        additional_sources = [Path(additional_path).resolve()]
+    else:
+        additional_sources = [Path(value).resolve() for value in additional_path]
+    additional_assets: list[Path] = []
+    for index, source in enumerate(additional_sources, 1):
+        asset = assets / f"additional_{index:02d}{source.suffix.lower()}"
+        shutil.copy2(source, asset)
+        additional_assets.append(asset)
 
     original = inspect_image_metadata(original_source)
     filtered = inspect_image_metadata(filtered_source)
     comparison = compare_metadata(original, filtered)
-    additional = inspect_image_metadata(additional_source) if additional_source else None
-    additional_comparisons = {
-        "original_vs_additional": compare_metadata(original, additional),
-        "filtered_vs_additional": compare_metadata(filtered, additional),
-    } if additional else {}
+    additional_images = [inspect_image_metadata(source) for source in additional_sources]
+    named_images = [("original", original_source, original), ("filtered", filtered_source, filtered)] + [
+        (f"additional_{index:02d}", source, metadata)
+        for index, (source, metadata) in enumerate(zip(additional_sources, additional_images), 1)
+    ]
+    pair_comparisons: dict[str, Any] = {}
+    for left_index, (left_name, left_path, left_metadata) in enumerate(named_images):
+        for right_name, right_path, right_metadata in named_images[left_index + 1:]:
+            pair_comparisons[f"{left_name}_vs_{right_name}"] = {
+                "metadata": compare_metadata(left_metadata, right_metadata),
+                "visual_similarity": compare_images(left_path, right_path).as_dict(),
+            }
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "original": original,
         "filtered": filtered,
         "comparison": comparison,
-        "additional": additional,
-        "additional_comparisons": additional_comparisons,
+        "additional": additional_images[0] if additional_images else None,
+        "additional_images": additional_images,
+        "pair_comparisons": pair_comparisons,
     }
     json_path = destination / "metadata_report.json"
     json_path.write_text(
@@ -207,13 +239,13 @@ def generate_metadata_report(
         f'''<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Diagnostic de métadonnées</title><style>
 body{{font:14px system-ui;background:#f3f4f6;color:#111827;margin:1.5rem}}main{{max-width:1500px;margin:auto}}section{{background:white;padding:1rem;margin:1rem 0;border-radius:10px}}.images{{display:grid;grid-template-columns:1fr 1fr;gap:1rem}}figure{{margin:0}}img{{width:100%;height:520px;object-fit:contain;background:#eee}}table{{width:100%;border-collapse:collapse}}th,td{{border:1px solid #d1d5db;padding:.5rem;text-align:left;vertical-align:top}}th{{width:25%}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;margin:0}}@media(max-width:850px){{.images{{grid-template-columns:1fr}}}}</style></head><body><main>
 <h1>Diagnostic comparé des métadonnées</h1><p>Lecture seule : aucun fichier source n'a été modifié. Les dates du système de fichiers sont affichées séparément des métadonnées intégrées.</p>
-<section class="images"><figure><figcaption><strong>Originale O18 image 0</strong></figcaption><img src="{html.escape(original_asset.relative_to(destination).as_posix())}" alt="originale"></figure><figure><figcaption><strong>Variante filtrée</strong></figcaption><img src="{html.escape(filtered_asset.relative_to(destination).as_posix())}" alt="filtrée"></figure>{f'<figure><figcaption><strong>Nouvelle photo iPhone</strong></figcaption><img src="{html.escape(additional_asset.relative_to(destination).as_posix())}" alt="nouvelle photo iPhone"></figure>' if additional_asset else ''}</section>
+<section class="images"><figure><figcaption><strong>Originale O18 image 0</strong></figcaption><img src="{html.escape(original_asset.relative_to(destination).as_posix())}" alt="originale"></figure><figure><figcaption><strong>Variante filtrée</strong></figcaption><img src="{html.escape(filtered_asset.relative_to(destination).as_posix())}" alt="filtrée"></figure>{''.join(f'<figure><figcaption><strong>{html.escape(source.name)}</strong></figcaption><img src="{html.escape(asset.relative_to(destination).as_posix())}" alt="photo supplémentaire"></figure>' for source, asset in zip(additional_sources, additional_assets))}</section>
 <section><h2>Similitudes</h2><table>{_table_rows(comparison['similarities'])}</table></section>
 <section><h2>Différences</h2><table>{_table_rows(comparison['differences'])}</table></section>
-{''.join(f'<section><h2>{html.escape(name.replace("_", " "))}</h2><h3>Similitudes</h3><table>{_table_rows(values["similarities"])}</table><h3>Différences</h3><table>{_table_rows(values["differences"])}</table></section>' for name, values in additional_comparisons.items())}
+{''.join(f'<section><h2>{html.escape(name.replace("_", " "))}</h2><h3>Comparaison visuelle</h3><table>{_table_rows(values["visual_similarity"])}</table><h3>Similitudes</h3><table>{_table_rows(values["metadata"]["similarities"])}</table><h3>Différences</h3><table>{_table_rows(values["metadata"]["differences"])}</table></section>' for name, values in pair_comparisons.items())}
 <section><h2>Métadonnées complètes de l'originale</h2><table>{_table_rows(original)}</table></section>
 <section><h2>Métadonnées complètes de la variante</h2><table>{_table_rows(filtered)}</table></section>
-{f'<section><h2>Métadonnées complètes de la nouvelle photo iPhone</h2><table>{_table_rows(additional)}</table></section>' if additional else ''}
+{''.join(f'<section><h2>Métadonnées complètes de {html.escape(source.name)}</h2><table>{_table_rows(metadata)}</table></section>' for source, metadata in zip(additional_sources, additional_images))}
 </main></body></html>''',
         encoding="utf-8",
     )
@@ -225,7 +257,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--original", required=True)
     parser.add_argument("--filtered", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--additional")
+    parser.add_argument("--additional", action="append", default=[])
     args = parser.parse_args(argv)
     report, payload = generate_metadata_report(args.original, args.filtered, args.output, args.additional)
     print(f"report={report}")

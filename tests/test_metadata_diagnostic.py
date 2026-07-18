@@ -29,12 +29,27 @@ def test_metadata_diagnostic_is_read_only_and_report_assets_exist(tmp_path: Path
     assert payload["filtered"]["stored_width"] == 90
     assert "stored_width" in payload["comparison"]["differences"]
     assert payload["additional"]["stored_width"] == 70
-    assert "original_vs_additional" in payload["additional_comparisons"]
+    assert "original_vs_additional_01" in payload["pair_comparisons"]
     content = report.read_text(encoding="utf-8")
     assert "Similitudes" in content and "Différences" in content
     assert (report.parent / "assets" / "original.jpg").is_file()
     assert (report.parent / "assets" / "filtered.jpg").is_file()
-    assert (report.parent / "assets" / "additional.jpg").is_file()
+    assert (report.parent / "assets" / "additional_01.jpg").is_file()
+
+
+def test_metadata_report_compares_multiple_additional_images(tmp_path: Path) -> None:
+    paths = [tmp_path / name for name in ("original.jpg", "filtered.jpg", "phone.jpg", "transfer.jpg")]
+    for index, path in enumerate(paths):
+        Image.new("RGB", (40 + index, 30), (index * 30, 10, 10)).save(path)
+
+    report, payload_path = generate_metadata_report(paths[0], paths[1], tmp_path / "report", paths[2:])
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+
+    assert len(payload["additional_images"]) == 2
+    assert "additional_01_vs_additional_02" in payload["pair_comparisons"]
+    assert payload["pair_comparisons"]["additional_01_vs_additional_02"]["visual_similarity"]["verdict"]
+    assert (report.parent / "assets" / "additional_01.jpg").is_file()
+    assert (report.parent / "assets" / "additional_02.jpg").is_file()
 
 
 def test_metadata_comparison_separates_equal_and_different_fields(tmp_path: Path) -> None:
