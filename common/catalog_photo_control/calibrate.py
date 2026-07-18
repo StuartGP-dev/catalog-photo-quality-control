@@ -24,7 +24,7 @@ from .models import Recipe, SourceListing, canonical_json, stable_hash
 from .source_loader import load_source_listing, resolve_listing_reference
 
 
-CALIBRATION_VERSION = "visual-human-review-v3-distance-40"
+CALIBRATION_VERSION = "visual-human-review-v4-expanded-distance-40"
 MINIMUM_REVIEW_RANKING_DISTANCE = 40
 CANVAS_MODES = (
     "white",
@@ -61,6 +61,7 @@ FAMILY_THRESHOLDS = {
     "zoom_offset": {"perceptible": 0.3, "strong": 0.8},
     "rotation_dezoom_canvas": {"perceptible": 0.3, "strong": 0.78},
     "crop_offset": {"perceptible": 0.3, "strong": 0.8},
+    "dezoom_rounded": {"perceptible": 0.01, "strong": 0.05},
 }
 FAMILY_DIRECTORY_CODES = {
     "rotation": "rot",
@@ -73,12 +74,14 @@ FAMILY_DIRECTORY_CODES = {
     "zoom_offset": "zoom_off",
     "rotation_dezoom_canvas": "rot_dezoom",
     "crop_offset": "crop_off",
+    "dezoom_rounded": "dezoom_round",
 }
 FAMILY_ALIASES = {
     "rotation": ("rotation",),
     "crop": ("crop",),
     "zoom": ("zoom",),
     "dezoom": ("dezoom",),
+    "rounded": ("dezoom_rounded",),
     "offset": ("offset",),
     "geometry-combinations": (
         "rotation_crop_compensated",
@@ -86,6 +89,7 @@ FAMILY_ALIASES = {
         "zoom_offset",
         "rotation_dezoom_canvas",
         "crop_offset",
+        "dezoom_rounded",
     ),
 }
 
@@ -192,6 +196,15 @@ def generate_coarse_specs(families: Sequence[str], coarse_steps: int) -> list[Ca
                 elif mode == "uniform_frame":
                     extra["uniform_frame_width"] = min(0.02, max(0.004, (1 - value) / 3))
                 specs.append(_spec("dezoom", mode, 1 - value, resize_scale=value, canvas_mode=mode, **extra))
+    if "dezoom_rounded" in requested:
+        values = sorted(_sample_steps(COARSE_VALUES["dezoom"], coarse_steps), reverse=True)
+        for index, value in enumerate(values):
+            radius = round(8 + index * 72 / max(1, len(values) - 1))
+            for mode in ("white", "sampled_background"):
+                specs.append(_spec(
+                    "dezoom_rounded", mode, 1 - value,
+                    resize_scale=value, canvas_mode=mode, rounded_radius=radius,
+                ))
     if "offset" in requested:
         for value in _sample_steps(COARSE_VALUES["offset"], coarse_steps):
             specs.extend((
@@ -204,25 +217,25 @@ def generate_coarse_specs(families: Sequence[str], coarse_steps: int) -> list[Ca
     if "rotation_crop_compensated" in requested:
         for t in steps:
             for sign, branch in ((-1, "left"), (1, "right")):
-                specs.append(_spec("rotation_crop_compensated", branch, t, rotation_degrees=sign * (0.8 + t), crop_fraction=0.005 + 0.01 * t))
+                specs.append(_spec("rotation_crop_compensated", branch, t, rotation_degrees=sign * (0.8 + 7.2 * t), crop_fraction=0.005 + 0.115 * t))
     if "rotation_zoom" in requested:
         for t in steps:
             for sign, branch in ((-1, "left"), (1, "right")):
-                specs.append(_spec("rotation_zoom", branch, t, rotation_degrees=sign * (0.5 + 0.7 * t), zoom=1.005 + 0.015 * t))
+                specs.append(_spec("rotation_zoom", branch, t, rotation_degrees=sign * (0.5 + 7.5 * t), zoom=1.005 + 0.195 * t))
     if "zoom_offset" in requested:
         for t in steps:
             for branch, parameter, sign in (("left", "offset_x", -1), ("right", "offset_x", 1), ("up", "offset_y", -1), ("down", "offset_y", 1)):
-                specs.append(_spec("zoom_offset", branch, t, zoom=1.01 + 0.02 * t, **{parameter: sign * (0.005 + 0.01 * t)}))
+                specs.append(_spec("zoom_offset", branch, t, zoom=1.01 + 0.19 * t, **{parameter: sign * (0.005 + 0.115 * t)}))
     if "rotation_dezoom_canvas" in requested:
         for t in steps:
             for sign, branch in ((-1, "left"), (1, "right")):
-                mode = CANVAS_MODES[min(len(CANVAS_MODES) - 1, round(t * (len(CANVAS_MODES) - 1)))]
+                mode = ("white", "sampled_background", "sampled_edge", "uniform_frame")[min(3, round(t * 3))]
                 extra = {"uniform_frame_width": 0.006 + 0.006 * t} if mode == "uniform_frame" else ({"side_band_width": 0.008 + 0.012 * t} if mode == "side_bands" else {})
-                specs.append(_spec("rotation_dezoom_canvas", f"{branch}-{mode}", t, rotation_degrees=sign * (0.5 + 0.5 * t), resize_scale=0.985 - 0.025 * t, canvas_mode=mode, **extra))
+                specs.append(_spec("rotation_dezoom_canvas", f"{branch}-{mode}", t, rotation_degrees=sign * (0.5 + 7.5 * t), resize_scale=0.99 - 0.19 * t, canvas_mode=mode, **extra))
     if "crop_offset" in requested:
         for t in steps:
             for branch, parameter, sign in (("left", "offset_x", -1), ("right", "offset_x", 1), ("up", "offset_y", -1), ("down", "offset_y", 1)):
-                specs.append(_spec("crop_offset", branch, t, crop_fraction=0.005 + 0.01 * t, **{parameter: sign * (0.005 + 0.005 * t)}))
+                specs.append(_spec("crop_offset", branch, t, crop_fraction=0.005 + 0.115 * t, **{parameter: sign * (0.005 + 0.115 * t)}))
     return specs
 
 
@@ -334,6 +347,8 @@ def _normalized_intensity(spec: CalibrationSpec) -> float:
     if spec.family == "zoom":
         return float(spec.parameters["zoom"]) - 1
     if spec.family == "dezoom":
+        return 1 - float(spec.parameters["resize_scale"])
+    if spec.family == "dezoom_rounded":
         return 1 - float(spec.parameters["resize_scale"])
     if spec.family == "offset":
         return max(abs(float(spec.parameters.get("offset_x", 0))), abs(float(spec.parameters.get("offset_y", 0))))
@@ -577,7 +592,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Calibrate visible catalog geometry transformations without writing final variants.")
     parser.add_argument("--listing", required=True)
     parser.add_argument("--source-root")
-    parser.add_argument("--families", default="rotation,crop,zoom,dezoom,offset,geometry-combinations")
+    parser.add_argument("--families", default="rotation,crop,zoom,dezoom,rounded,offset,geometry-combinations")
     parser.add_argument("--output-root", default="local/calibration_runs")
     parser.add_argument("--coarse-steps", type=int, default=6)
     parser.add_argument("--bisection-steps", type=int, default=4)

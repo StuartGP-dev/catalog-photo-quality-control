@@ -19,10 +19,11 @@ L'enveloppe exploratoire couvre volontairement jusqu'à ±8° de rotation, 12 %
 de crop, zoom 1,20, dézoom 20 % et offsets ±12 %. Une classification automatique
 rouge ne masque pas le rendu : elle aide seulement la revue humaine.
 
-La campagne de revue v3 repart avec un stockage de décisions vide. Une recette
+La campagne de revue v4 élargit les combinaisons uniformes et ajoute le dézoom
+avec coins arrondis. Elle repart avec un stockage de décisions vide. Une recette
 n'est proposée à la revue que si ses cinq images sont `different` de leurs
 originales et si la distance limitante `pHash + dHash + wHash` est au moins
-40 sur 192. Ce seuil interne conservateur a gardé 21 des 302 recettes O18 ; il
+40 sur 192. L'espace v4 a retenu 65 recettes O18 sur neuf familles ; ce seuil
 ne représente le seuil d'aucune plateforme externe.
 
 ```powershell

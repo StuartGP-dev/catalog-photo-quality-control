@@ -48,7 +48,7 @@ def test_generation_covers_directions_zoom_dezoom_and_combinations() -> None:
         (
             "rotation", "crop", "zoom", "dezoom", "offset",
             "rotation_crop_compensated", "rotation_zoom", "zoom_offset",
-            "rotation_dezoom_canvas", "crop_offset",
+            "rotation_dezoom_canvas", "crop_offset", "dezoom_rounded",
         ),
         2,
     )
@@ -63,7 +63,7 @@ def test_generation_covers_directions_zoom_dezoom_and_combinations() -> None:
     assert all(spec.parameters["canvas_mode"] != "none" for spec in dezooms)
     assert {
         "rotation_crop_compensated", "rotation_zoom", "zoom_offset",
-        "rotation_dezoom_canvas", "crop_offset",
+        "rotation_dezoom_canvas", "crop_offset", "dezoom_rounded",
     } <= {spec.family for spec in specs}
 
 
