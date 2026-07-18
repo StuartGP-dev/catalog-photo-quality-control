@@ -15,21 +15,26 @@ from common.catalog_photo_control.metadata_diagnostic import (
 def test_metadata_diagnostic_is_read_only_and_report_assets_exist(tmp_path: Path) -> None:
     original = tmp_path / "original.jpg"
     filtered = tmp_path / "filtered.jpg"
+    additional = tmp_path / "additional.jpg"
     Image.new("RGB", (80, 60), "white").save(original, quality=91, dpi=(72, 72))
     Image.new("RGB", (90, 60), "white").save(filtered, quality=95)
-    before = original.read_bytes(), filtered.read_bytes()
+    Image.new("RGB", (70, 70), "white").save(additional, quality=90)
+    before = original.read_bytes(), filtered.read_bytes(), additional.read_bytes()
 
-    report, payload_path = generate_metadata_report(original, filtered, tmp_path / "report")
+    report, payload_path = generate_metadata_report(original, filtered, tmp_path / "report", additional)
 
-    assert before == (original.read_bytes(), filtered.read_bytes())
+    assert before == (original.read_bytes(), filtered.read_bytes(), additional.read_bytes())
     payload = json.loads(payload_path.read_text(encoding="utf-8"))
     assert payload["original"]["stored_width"] == 80
     assert payload["filtered"]["stored_width"] == 90
     assert "stored_width" in payload["comparison"]["differences"]
+    assert payload["additional"]["stored_width"] == 70
+    assert "original_vs_additional" in payload["additional_comparisons"]
     content = report.read_text(encoding="utf-8")
     assert "Similitudes" in content and "Différences" in content
     assert (report.parent / "assets" / "original.jpg").is_file()
     assert (report.parent / "assets" / "filtered.jpg").is_file()
+    assert (report.parent / "assets" / "additional.jpg").is_file()
 
 
 def test_metadata_comparison_separates_equal_and_different_fields(tmp_path: Path) -> None:
