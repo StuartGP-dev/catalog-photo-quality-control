@@ -39,9 +39,11 @@ For a listing source version, selected variants cannot reuse the same ordered
 pixel-dimension signature. Dimensions include a small deterministic recipe and
 source-index signature, so outputs never equal their originals in both axes.
 
-Reserved fields are `title_text`, `description_text`, `price_cents`, `currency`,
-`metadata_json`, and `metadata_status`. They are intentionally not populated by
-this refactor.
+Content fields are `title_text`, `description_text`, `price_cents`, and
+`currency`. When a read-only source `config.json` provides them, selection
+copies them into every complete variant and writes a `listing.json` beside its
+images. `metadata_json` and `metadata_status` remain reserved for the later
+metadata-writing phase.
 
 Variants are inserted as `draft`. SQLite triggers only allow transition to
 `ready` when the number, indices, and hashes of variant images exactly cover the

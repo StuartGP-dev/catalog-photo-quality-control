@@ -1,0 +1,158 @@
+from __future__ import annotations
+
+import argparse
+import hashlib
+import html
+import json
+import os
+import shutil
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Mapping
+
+from PIL import ExifTags, Image, ImageOps
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _safe(value: Any) -> Any:
+    if isinstance(value, bytes):
+        return {"byte_length": len(value), "sha256": hashlib.sha256(value).hexdigest()}
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (tuple, list)):
+        return [_safe(item) for item in value]
+    if isinstance(value, Mapping):
+        return {str(key): _safe(item) for key, item in value.items()}
+    return str(value)
+
+
+def inspect_image_metadata(path: str | Path) -> dict[str, Any]:
+    source = Path(path).resolve()
+    if not source.is_file():
+        raise FileNotFoundError(source)
+    stat = source.stat()
+    with Image.open(source) as opened:
+        exif = {
+            ExifTags.TAGS.get(tag, str(tag)): _safe(value)
+            for tag, value in opened.getexif().items()
+        }
+        embedded = {
+            str(key): _safe(value)
+            for key, value in opened.info.items()
+            if key not in {"exif", "icc_profile"}
+        }
+        icc = opened.info.get("icc_profile")
+        quantization = getattr(opened, "quantization", None)
+        normalized_size = ImageOps.exif_transpose(opened).size
+        return {
+            "path": str(source),
+            "filename": source.name,
+            "sha256": _sha256(source),
+            "file_size_bytes": stat.st_size,
+            "filesystem_modified_utc": datetime.fromtimestamp(
+                stat.st_mtime, timezone.utc
+            ).isoformat(),
+            "format": opened.format,
+            "mode": opened.mode,
+            "stored_width": opened.width,
+            "stored_height": opened.height,
+            "orientation_normalized_width": normalized_size[0],
+            "orientation_normalized_height": normalized_size[1],
+            "exif": exif,
+            "embedded_info": embedded,
+            "icc_profile": _safe(icc) if icc else None,
+            "jpeg_quantization_tables": len(quantization or {}),
+        }
+
+
+def compare_metadata(
+    original: Mapping[str, Any], filtered: Mapping[str, Any]
+) -> dict[str, Any]:
+    ignored = {"path", "filename", "sha256", "filesystem_modified_utc"}
+    shared: dict[str, Any] = {}
+    different: dict[str, Any] = {}
+    for key in sorted(set(original) | set(filtered)):
+        if key in ignored:
+            continue
+        left, right = original.get(key), filtered.get(key)
+        if left == right:
+            shared[key] = left
+        else:
+            different[key] = {"original": left, "filtered": right}
+    return {"similarities": shared, "differences": different}
+
+
+def _table_rows(values: Mapping[str, Any]) -> str:
+    return "".join(
+        f"<tr><th>{html.escape(str(key))}</th><td><pre>{html.escape(json.dumps(value, ensure_ascii=False, indent=2))}</pre></td></tr>"
+        for key, value in values.items()
+    )
+
+
+def generate_metadata_report(
+    original_path: str | Path,
+    filtered_path: str | Path,
+    output_dir: str | Path,
+) -> tuple[Path, Path]:
+    original_source = Path(original_path).resolve()
+    filtered_source = Path(filtered_path).resolve()
+    destination = Path(output_dir).resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+    assets = destination / "assets"
+    assets.mkdir(exist_ok=True)
+    original_asset = assets / f"original{original_source.suffix.lower()}"
+    filtered_asset = assets / f"filtered{filtered_source.suffix.lower()}"
+    shutil.copy2(original_source, original_asset)
+    shutil.copy2(filtered_source, filtered_asset)
+
+    original = inspect_image_metadata(original_source)
+    filtered = inspect_image_metadata(filtered_source)
+    comparison = compare_metadata(original, filtered)
+    payload = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "original": original,
+        "filtered": filtered,
+        "comparison": comparison,
+    }
+    json_path = destination / "metadata_report.json"
+    json_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    report = destination / "index.html"
+    report.write_text(
+        f'''<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Diagnostic de métadonnées</title><style>
+body{{font:14px system-ui;background:#f3f4f6;color:#111827;margin:1.5rem}}main{{max-width:1500px;margin:auto}}section{{background:white;padding:1rem;margin:1rem 0;border-radius:10px}}.images{{display:grid;grid-template-columns:1fr 1fr;gap:1rem}}figure{{margin:0}}img{{width:100%;height:520px;object-fit:contain;background:#eee}}table{{width:100%;border-collapse:collapse}}th,td{{border:1px solid #d1d5db;padding:.5rem;text-align:left;vertical-align:top}}th{{width:25%}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;margin:0}}@media(max-width:850px){{.images{{grid-template-columns:1fr}}}}</style></head><body><main>
+<h1>Diagnostic comparé des métadonnées</h1><p>Lecture seule : aucun fichier source n'a été modifié. Les dates du système de fichiers sont affichées séparément des métadonnées intégrées.</p>
+<section class="images"><figure><figcaption><strong>Originale O18 image 0</strong></figcaption><img src="{html.escape(original_asset.relative_to(destination).as_posix())}" alt="originale"></figure><figure><figcaption><strong>Variante filtrée</strong></figcaption><img src="{html.escape(filtered_asset.relative_to(destination).as_posix())}" alt="filtrée"></figure></section>
+<section><h2>Similitudes</h2><table>{_table_rows(comparison['similarities'])}</table></section>
+<section><h2>Différences</h2><table>{_table_rows(comparison['differences'])}</table></section>
+<section><h2>Métadonnées complètes de l'originale</h2><table>{_table_rows(original)}</table></section>
+<section><h2>Métadonnées complètes de la variante</h2><table>{_table_rows(filtered)}</table></section>
+</main></body></html>''',
+        encoding="utf-8",
+    )
+    return report, json_path
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Compare image metadata without modifying either source file.")
+    parser.add_argument("--original", required=True)
+    parser.add_argument("--filtered", required=True)
+    parser.add_argument("--output", required=True)
+    args = parser.parse_args(argv)
+    report, payload = generate_metadata_report(args.original, args.filtered, args.output)
+    print(f"report={report}")
+    print(f"json={payload}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

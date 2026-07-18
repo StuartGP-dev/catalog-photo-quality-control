@@ -21,6 +21,11 @@ rechecks the barrier immediately before its atomic final insert. `html_report.py
 is the single benchmark report writer. `perceptual_calibration.py` creates a
 portable one-file HTML report plus local assets without modifying source images.
 
+`listing_content.py` reads title, description and price from the listing's
+read-only `config.json`, persists them in final variants and writes a portable
+`listing.json` beside each complete image set. `metadata_diagnostic.py` is a
+read-only two-image inspector producing JSON and HTML; it never edits metadata.
+
 The production envelope permits at most four active parameters and normalized
 recipe intensity 1.2. Every rendered image must keep SSIM at least 0.90, pixel
 and luminance MAE at most 0.06, and sharpness ratio between 0.70 and 1.60.
