@@ -1,0 +1,139 @@
+from __future__ import annotations
+
+import argparse
+import html
+import json
+import shutil
+from io import BytesIO
+from pathlib import Path
+from typing import Any, Mapping
+
+from PIL import Image, ImageCms, ImageOps
+
+from .metadata_diagnostic import _flatten_metadata, inspect_image_metadata
+
+
+SOFTWARE_TAG = "Catalog Photo Control; pixels transformed from a filtered catalogue image"
+
+
+def restore_technical_metadata(
+    source_path: str | Path,
+    reference_path: str | Path,
+    output_path: str | Path,
+) -> Path:
+    """Create a new image with compatible technical metadata, without forging capture provenance."""
+    source = Path(source_path).resolve()
+    reference = Path(reference_path).resolve()
+    output = Path(output_path).resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    with Image.open(source) as source_opened, Image.open(reference) as reference_opened:
+        image = ImageOps.exif_transpose(source_opened).convert("RGB")
+        source_profile = source_opened.info.get("icc_profile")
+        target_profile = reference_opened.info.get("icc_profile")
+        if target_profile:
+            input_profile = (
+                ImageCms.ImageCmsProfile(BytesIO(source_profile))
+                if source_profile
+                else ImageCms.createProfile("sRGB")
+            )
+            image = ImageCms.profileToProfile(
+                image,
+                input_profile,
+                ImageCms.ImageCmsProfile(BytesIO(target_profile)),
+                outputMode="RGB",
+            )
+
+        exif = Image.Exif()
+        exif[274] = 1  # Orientation: pixels are already normalized.
+        exif[282] = 72
+        exif[283] = 72
+        exif[296] = 2  # inches
+        exif[305] = SOFTWARE_TAG
+        exif[531] = 1  # centered YCbCr, like the reference iPhone file
+        image.save(
+            output,
+            format="JPEG",
+            quality=95,
+            subsampling=0,
+            dpi=(300, 300),  # Match the reference JFIF header; EXIF remains 72 dpi.
+            exif=exif,
+            icc_profile=target_profile,
+        )
+    return output
+
+
+def _change_table(before: Mapping[str, Any], after: Mapping[str, Any]) -> str:
+    left = _flatten_metadata(before)
+    right = _flatten_metadata(after)
+    rows = []
+    for key in sorted(set(left) | set(right)):
+        old = left.get(key, "—")
+        new = right.get(key, "—")
+        if old == new:
+            change = "inchangé"
+        elif old == "—":
+            change = "ajouté"
+        elif new == "—":
+            change = "retiré"
+        else:
+            change = "modifié"
+        rows.append(
+            f"<tr><th>{html.escape(key)}</th>"
+            f"<td><pre>{html.escape(json.dumps(old, ensure_ascii=False))}</pre></td>"
+            f"<td><pre>{html.escape(json.dumps(new, ensure_ascii=False))}</pre></td>"
+            f"<td>{change}</td></tr>"
+        )
+    return "".join(rows)
+
+
+def generate_restoration_report(
+    source_path: str | Path,
+    restored_path: str | Path,
+    reference_path: str | Path,
+    output_dir: str | Path,
+) -> Path:
+    destination = Path(output_dir).resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+    assets = destination / "assets"
+    assets.mkdir(exist_ok=True)
+    before_asset = assets / "before.jpg"
+    after_asset = assets / "after.jpg"
+    shutil.copy2(source_path, before_asset)
+    shutil.copy2(restored_path, after_asset)
+    before = inspect_image_metadata(source_path)
+    after = inspect_image_metadata(restored_path)
+    reference = inspect_image_metadata(reference_path)
+    payload = {"before": before, "after": after, "reference": reference}
+    (destination / "metadata_changes.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    report = destination / "index.html"
+    report.write_text(
+        f'''<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Métadonnées avant/après</title><style>
+body{{font:14px system-ui;background:#f3f4f6;margin:1.5rem;color:#111827}}main{{max-width:1500px;margin:auto}}section{{background:#fff;padding:1rem;margin:1rem 0;border-radius:10px}}.images{{display:grid;grid-template-columns:1fr 1fr;gap:1rem}}img{{width:100%;height:520px;object-fit:contain;background:#eee}}table{{width:100%;border-collapse:collapse}}th,td{{border:1px solid #d1d5db;padding:.5rem;text-align:left;vertical-align:top}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;margin:0}}@media(max-width:850px){{.images{{grid-template-columns:1fr}}}}</style></head><body><main>
+<h1>Variante filtrée — métadonnées avant/après</h1>
+<section><p>La copie « après » utilise le profil Display P3 et la résolution technique de la référence iPhone. Les pixels ont été convertis correctement vers ce profil. Les champs de provenance de prise de vue — appareil, objectif, date et GPS — ne sont pas falsifiés.</p></section>
+<section class="images"><figure><figcaption><strong>Avant</strong></figcaption><img src="assets/before.jpg"></figure><figure><figcaption><strong>Après</strong></figcaption><img src="assets/after.jpg"></figure></section>
+<section><h2>Tableau comparatif complet</h2><table><thead><tr><th>Propriété</th><th>Avant</th><th>Après</th><th>Modification</th></tr></thead><tbody>{_change_table(before, after)}</tbody></table></section>
+</main></body></html>''', encoding="utf-8"
+    )
+    return report
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Restore safe technical metadata on a filtered image copy.")
+    parser.add_argument("--source", required=True)
+    parser.add_argument("--reference", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--report-dir", required=True)
+    args = parser.parse_args(argv)
+    restored = restore_technical_metadata(args.source, args.reference, args.output)
+    report = generate_restoration_report(args.source, restored, args.reference, args.report_dir)
+    print(f"image={restored}")
+    print(f"report={report}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
