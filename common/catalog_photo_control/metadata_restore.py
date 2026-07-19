@@ -10,7 +10,7 @@ from typing import Any, Mapping
 
 from PIL import Image, ImageCms, ImageOps
 
-from .metadata_diagnostic import _flatten_metadata, inspect_image_metadata
+from .metadata_diagnostic import _comparison_matrix, _flatten_metadata, inspect_image_metadata
 
 
 SOFTWARE_TAG = "Catalog Photo Control; pixels transformed from a filtered catalogue image"
@@ -92,6 +92,7 @@ def generate_restoration_report(
     restored_path: str | Path,
     reference_path: str | Path,
     output_dir: str | Path,
+    original_path: str | Path | None = None,
 ) -> Path:
     destination = Path(output_dir).resolve()
     destination.mkdir(parents=True, exist_ok=True)
@@ -104,17 +105,27 @@ def generate_restoration_report(
     before = inspect_image_metadata(source_path)
     after = inspect_image_metadata(restored_path)
     reference = inspect_image_metadata(reference_path)
-    payload = {"before": before, "after": after, "reference": reference}
+    original = inspect_image_metadata(original_path) if original_path else None
+    payload = {"original": original, "before": before, "after": after, "reference": reference}
     (destination / "metadata_changes.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
     )
     report = destination / "index.html"
+    matrix_images = []
+    if original:
+        matrix_images.append(("Originale O18", original))
+    matrix_images.extend([
+        ("Variante filtrée — avant", before),
+        ("Variante filtrée — après", after),
+        ("IMG_3206.jpg — référence iPhone 15", reference),
+    ])
     report.write_text(
         f'''<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Métadonnées avant/après</title><style>
 body{{font:14px system-ui;background:#f3f4f6;margin:1.5rem;color:#111827}}main{{max-width:1500px;margin:auto}}section{{background:#fff;padding:1rem;margin:1rem 0;border-radius:10px}}.images{{display:grid;grid-template-columns:1fr 1fr;gap:1rem}}img{{width:100%;height:520px;object-fit:contain;background:#eee}}table{{width:100%;border-collapse:collapse}}th,td{{border:1px solid #d1d5db;padding:.5rem;text-align:left;vertical-align:top}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;margin:0}}@media(max-width:850px){{.images{{grid-template-columns:1fr}}}}</style></head><body><main>
 <h1>Variante filtrée — métadonnées avant/après</h1>
 <section><p>La copie « après » utilise le profil Display P3 et la résolution technique de la référence iPhone. Les pixels ont été convertis correctement vers ce profil. Les champs de provenance de prise de vue — appareil, objectif, date et GPS — ne sont pas falsifiés.</p></section>
 <section class="images"><figure><figcaption><strong>Avant</strong></figcaption><img src="assets/before.jpg"></figure><figure><figcaption><strong>Après</strong></figcaption><img src="assets/after.jpg"></figure></section>
+<section><h2>Tableau comparatif complet des métadonnées</h2><p>Il reprend la matrice du rapport précédent et ajoute la variante après traitement. « — » signifie que la propriété est absente.</p><table>{_comparison_matrix(matrix_images)}</table></section>
 <section><h2>Tableau comparatif complet</h2><table><thead><tr><th>Propriété</th><th>Avant</th><th>Après</th><th>Modification</th></tr></thead><tbody>{_change_table(before, after)}</tbody></table></section>
 </main></body></html>''', encoding="utf-8"
     )
@@ -127,9 +138,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--reference", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--report-dir", required=True)
+    parser.add_argument("--original")
     args = parser.parse_args(argv)
     restored = restore_technical_metadata(args.source, args.reference, args.output)
-    report = generate_restoration_report(args.source, restored, args.reference, args.report_dir)
+    report = generate_restoration_report(
+        args.source, restored, args.reference, args.report_dir, original_path=args.original
+    )
     print(f"image={restored}")
     print(f"report={report}")
     return 0

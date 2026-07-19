@@ -3,7 +3,7 @@ from pathlib import Path
 from PIL import Image, ImageCms
 
 from common.catalog_photo_control.metadata_diagnostic import inspect_image_metadata
-from common.catalog_photo_control.metadata_restore import restore_technical_metadata
+from common.catalog_photo_control.metadata_restore import generate_restoration_report, restore_technical_metadata
 
 
 def test_restore_technical_metadata_is_non_destructive_and_truthful(tmp_path: Path) -> None:
@@ -30,3 +30,17 @@ def test_restore_technical_metadata_is_non_destructive_and_truthful(tmp_path: Pa
     assert metadata["embedded_info"]["dpi"] == [300, 300]
     assert "Make" not in metadata["exif"]
     assert "GPSInfo" not in metadata["exif"]
+
+
+def test_restoration_report_has_original_before_after_and_reference_columns(tmp_path: Path) -> None:
+    paths = [tmp_path / name for name in ("original.jpg", "before.jpg", "after.jpg", "reference.jpg")]
+    for index, path in enumerate(paths):
+        Image.new("RGB", (30 + index, 20), "white").save(path)
+
+    report = generate_restoration_report(paths[1], paths[2], paths[3], tmp_path / "report", paths[0])
+    content = report.read_text(encoding="utf-8")
+
+    assert "Originale O18" in content
+    assert "Variante filtrée — avant" in content
+    assert "Variante filtrée — après" in content
+    assert "IMG_3206.jpg — référence iPhone 15" in content
