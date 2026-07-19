@@ -4,6 +4,7 @@ import argparse
 import html
 import json
 import shutil
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Mapping
@@ -20,6 +21,7 @@ def restore_technical_metadata(
     source_path: str | Path,
     reference_path: str | Path,
     output_path: str | Path,
+    capture_metadata_path: str | Path | None = None,
 ) -> Path:
     """Create a new image with compatible technical metadata, without forging capture provenance."""
     source = Path(source_path).resolve()
@@ -27,7 +29,12 @@ def restore_technical_metadata(
     output = Path(output_path).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    with Image.open(source) as source_opened, Image.open(reference) as reference_opened:
+    capture_source = Path(capture_metadata_path).resolve() if capture_metadata_path else None
+    with (
+        Image.open(source) as source_opened,
+        Image.open(reference) as reference_opened,
+        Image.open(capture_source) if capture_source else Image.open(source) as capture_opened,
+    ):
         image = ImageOps.exif_transpose(source_opened).convert("RGB")
         source_profile = source_opened.info.get("icc_profile")
         target_profile = reference_opened.info.get("icc_profile")
@@ -44,13 +51,17 @@ def restore_technical_metadata(
                 outputMode="RGB",
             )
 
-        exif = Image.Exif()
+        exif = capture_opened.getexif()
+        # GPS is intentionally omitted even when it exists in the capture source.
+        if 34853 in exif:
+            del exif[34853]
         exif[274] = 1  # Orientation: pixels are already normalized.
         exif[282] = 72
         exif[283] = 72
         exif[296] = 2  # inches
         exif[305] = SOFTWARE_TAG
         exif[531] = 1  # centered YCbCr, like the reference iPhone file
+        exif[306] = datetime.now().astimezone().strftime("%Y:%m:%d %H:%M:%S")
         image.save(
             output,
             format="JPEG",
@@ -139,8 +150,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", required=True)
     parser.add_argument("--report-dir", required=True)
     parser.add_argument("--original")
+    parser.add_argument("--capture-metadata")
     args = parser.parse_args(argv)
-    restored = restore_technical_metadata(args.source, args.reference, args.output)
+    restored = restore_technical_metadata(
+        args.source, args.reference, args.output, capture_metadata_path=args.capture_metadata
+    )
     report = generate_restoration_report(
         args.source, restored, args.reference, args.report_dir, original_path=args.original
     )

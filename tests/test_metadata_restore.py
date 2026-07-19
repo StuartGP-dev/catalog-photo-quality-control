@@ -32,6 +32,31 @@ def test_restore_technical_metadata_is_non_destructive_and_truthful(tmp_path: Pa
     assert "GPSInfo" not in metadata["exif"]
 
 
+def test_restore_uses_capture_source_and_removes_gps(tmp_path: Path) -> None:
+    filtered = tmp_path / "filtered.jpg"
+    reference = tmp_path / "reference.jpg"
+    capture = tmp_path / "capture.jpg"
+    output = tmp_path / "output.jpg"
+    Image.new("RGB", (40, 30), "white").save(filtered)
+    profile = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+    Image.new("RGB", (40, 30), "white").save(reference, icc_profile=profile)
+    exif = Image.Exif()
+    exif[271] = "Apple"
+    exif[272] = "iPhone 13"
+    exif[36867] = "2024:08:23 14:25:23"
+    exif[34853] = {1: "N", 2: (47.0, 0.0, 0.0)}
+    Image.new("RGB", (40, 30), "white").save(capture, exif=exif)
+
+    restore_technical_metadata(filtered, reference, output, capture)
+    metadata = inspect_image_metadata(output)
+
+    assert metadata["exif"]["Make"] == "Apple"
+    assert metadata["exif"]["Model"] == "iPhone 13"
+    assert metadata["exif"]["DateTimeOriginal"] == "2024:08:23 14:25:23"
+    assert "GPSInfo" not in metadata["exif"]
+    assert metadata["exif"]["DateTime"].startswith("20")
+
+
 def test_restoration_report_has_original_before_after_and_reference_columns(tmp_path: Path) -> None:
     paths = [tmp_path / name for name in ("original.jpg", "before.jpg", "after.jpg", "reference.jpg")]
     for index, path in enumerate(paths):
