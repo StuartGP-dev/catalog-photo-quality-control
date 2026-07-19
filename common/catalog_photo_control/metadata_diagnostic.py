@@ -217,11 +217,26 @@ def _visual_summary_rows(comparisons: Mapping[str, Any]) -> str:
     )
 
 
+def _pair_sections(comparisons: Mapping[str, Any], metadata_only: bool) -> str:
+    sections = []
+    for name, values in comparisons.items():
+        visual = ""
+        if not metadata_only:
+            visual = f'<h3>Comparaison visuelle</h3><table>{_table_rows(values["visual_similarity"])}</table>'
+        sections.append(
+            f'<section><h2>{html.escape(name.replace("_", " "))}</h2>{visual}'
+            f'<h3>Similitudes de métadonnées</h3><table>{_table_rows(values["metadata"]["similarities"])}</table>'
+            f'<h3>Différences de métadonnées</h3><table>{_table_rows(values["metadata"]["differences"])}</table></section>'
+        )
+    return "".join(sections)
+
+
 def generate_metadata_report(
     original_path: str | Path,
     filtered_path: str | Path,
     output_dir: str | Path,
     additional_path: str | Path | Sequence[str | Path] | None = None,
+    metadata_only: bool = False,
 ) -> tuple[Path, Path]:
     original_source = Path(original_path).resolve()
     filtered_source = Path(filtered_path).resolve()
@@ -256,10 +271,10 @@ def generate_metadata_report(
     pair_comparisons: dict[str, Any] = {}
     for left_index, (left_name, left_path, left_metadata) in enumerate(named_images):
         for right_name, right_path, right_metadata in named_images[left_index + 1:]:
-            pair_comparisons[f"{left_name}_vs_{right_name}"] = {
-                "metadata": compare_metadata(left_metadata, right_metadata),
-                "visual_similarity": compare_images(left_path, right_path).as_dict(),
-            }
+            values: dict[str, Any] = {"metadata": compare_metadata(left_metadata, right_metadata)}
+            if not metadata_only:
+                values["visual_similarity"] = compare_images(left_path, right_path).as_dict()
+            pair_comparisons[f"{left_name}_vs_{right_name}"] = values
     matrix_images = [("Originale O18", original), ("Variante filtrée", filtered)] + [
         (source.name, metadata) for source, metadata in zip(additional_sources, additional_images)
     ]
@@ -271,6 +286,7 @@ def generate_metadata_report(
         "additional": additional_images[0] if additional_images else None,
         "additional_images": additional_images,
         "pair_comparisons": pair_comparisons,
+        "metadata_only": metadata_only,
     }
     json_path = destination / "metadata_report.json"
     json_path.write_text(
@@ -283,11 +299,11 @@ def generate_metadata_report(
 body{{font:14px system-ui;background:#f3f4f6;color:#111827;margin:1.5rem}}main{{max-width:1500px;margin:auto}}section{{background:white;padding:1rem;margin:1rem 0;border-radius:10px}}.images{{display:grid;grid-template-columns:1fr 1fr;gap:1rem}}figure{{margin:0}}img{{width:100%;height:520px;object-fit:contain;background:#eee}}table{{width:100%;border-collapse:collapse}}th,td{{border:1px solid #d1d5db;padding:.5rem;text-align:left;vertical-align:top}}th{{width:25%}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;margin:0}}@media(max-width:850px){{.images{{grid-template-columns:1fr}}}}</style></head><body><main>
 <h1>Diagnostic comparé des métadonnées</h1><p>Lecture seule : aucun fichier source n'a été modifié. Les dates du système de fichiers sont affichées séparément des métadonnées intégrées.</p>
 <section class="images"><figure><figcaption><strong>Originale O18 image 0</strong></figcaption><img src="{html.escape(original_asset.relative_to(destination).as_posix())}" alt="originale"></figure><figure><figcaption><strong>Variante filtrée</strong></figcaption><img src="{html.escape(filtered_asset.relative_to(destination).as_posix())}" alt="filtrée"></figure>{''.join(f'<figure><figcaption><strong>{html.escape(source.name)}</strong></figcaption><img src="{html.escape(asset.relative_to(destination).as_posix())}" alt="photo supplémentaire"></figure>' for source, asset in zip(additional_sources, additional_assets))}</section>
-<section><h2>Résumé simplifié des comparaisons visuelles</h2><p>Une distance de 0/64 signifie que le hash perceptuel voit les images comme identiques. Le SHA-256 exige que les fichiers soient strictement identiques octet par octet.</p><table><thead><tr><th>Paire</th><th>SHA identique</th><th>pHash</th><th>dHash</th><th>wHash</th><th>Verdict</th><th>Explication</th></tr></thead><tbody>{_visual_summary_rows(pair_comparisons)}</tbody></table></section>
+{'' if metadata_only else f'<section><h2>Résumé simplifié des comparaisons visuelles</h2><p>Une distance de 0/64 signifie que le hash perceptuel voit les images comme identiques. Le SHA-256 exige que les fichiers soient strictement identiques octet par octet.</p><table><thead><tr><th>Paire</th><th>SHA identique</th><th>pHash</th><th>dHash</th><th>wHash</th><th>Verdict</th><th>Explication</th></tr></thead><tbody>{_visual_summary_rows(pair_comparisons)}</tbody></table></section>'}
 <section><h2>Tableau comparatif complet</h2><p>Toutes les propriétés détectées sont réunies ici. « — » signifie que la propriété n'existe pas dans ce fichier. Les sections suivantes conservent la représentation technique détaillée.</p><table>{_comparison_matrix(matrix_images)}</table></section>
 <section><h2>Similitudes</h2><table>{_table_rows(comparison['similarities'])}</table></section>
 <section><h2>Différences</h2><table>{_table_rows(comparison['differences'])}</table></section>
-{''.join(f'<section><h2>{html.escape(name.replace("_", " "))}</h2><h3>Comparaison visuelle</h3><table>{_table_rows(values["visual_similarity"])}</table><h3>Similitudes</h3><table>{_table_rows(values["metadata"]["similarities"])}</table><h3>Différences</h3><table>{_table_rows(values["metadata"]["differences"])}</table></section>' for name, values in pair_comparisons.items())}
+{_pair_sections(pair_comparisons, metadata_only)}
 <section><h2>Métadonnées complètes de l'originale</h2><table>{_table_rows(original)}</table></section>
 <section><h2>Métadonnées complètes de la variante</h2><table>{_table_rows(filtered)}</table></section>
 {''.join(f'<section><h2>Métadonnées complètes de {html.escape(source.name)}</h2><table>{_table_rows(metadata)}</table></section>' for source, metadata in zip(additional_sources, additional_images))}
@@ -303,8 +319,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--filtered", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--additional", action="append", default=[])
+    parser.add_argument("--metadata-only", action="store_true")
     args = parser.parse_args(argv)
-    report, payload = generate_metadata_report(args.original, args.filtered, args.output, args.additional)
+    report, payload = generate_metadata_report(
+        args.original, args.filtered, args.output, args.additional, metadata_only=args.metadata_only
+    )
     print(f"report={report}")
     print(f"json={payload}")
     return 0

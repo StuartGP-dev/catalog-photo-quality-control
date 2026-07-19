@@ -55,6 +55,23 @@ def test_metadata_report_compares_multiple_additional_images(tmp_path: Path) -> 
     assert (report.parent / "assets" / "additional_02.jpg").is_file()
 
 
+def test_metadata_only_report_omits_visual_comparisons(tmp_path: Path) -> None:
+    paths = [tmp_path / name for name in ("original.jpg", "filtered.jpg", "phone.jpg")]
+    for path in paths:
+        Image.new("RGB", (30, 20), "white").save(path)
+
+    report, payload_path = generate_metadata_report(
+        paths[0], paths[1], tmp_path / "report", paths[2], metadata_only=True
+    )
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    content = report.read_text(encoding="utf-8")
+
+    assert payload["metadata_only"] is True
+    assert "visual_similarity" not in payload["pair_comparisons"]["original_vs_filtered"]
+    assert "Comparaison visuelle" not in content
+    assert "Tableau comparatif complet" in content
+
+
 def test_metadata_comparison_separates_equal_and_different_fields(tmp_path: Path) -> None:
     first = tmp_path / "first.png"
     second = tmp_path / "second.png"
