@@ -104,6 +104,15 @@ Les deux bases vides peuvent aussi être initialisées sans lancer de benchmark 
 python -m common.catalog_photo_control.bench_db --local-root local
 ```
 
+Une vue générique de toutes les annonces, variants, images et colonnes de la
+base finale peut être régénérée à tout moment :
+
+```powershell
+python -m common.catalog_photo_control.catalog_report `
+  --database local\databases\catalog_variants.sqlite3 `
+  --output local\catalog\index.html
+```
+
 Le détail des tables et invariants se trouve dans
 [`docs/SCHEMA.md`](docs/SCHEMA.md). Le seul espace de filtres est
 [`config/filter_space.json`](config/filter_space.json) ; il n’existe aucun profil
