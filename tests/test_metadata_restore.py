@@ -45,6 +45,7 @@ def test_restore_uses_capture_source_and_removes_gps(tmp_path: Path) -> None:
     exif[272] = "iPhone 13"
     exif[36867] = "2024:08:23 14:25:23"
     exif[34853] = {1: "N", 2: (47.0, 0.0, 0.0)}
+    exif[34665] = {37396: (10, 10, 5, 5), 37500: b"camera-private-data"}
     Image.new("RGB", (40, 30), "white").save(capture, exif=exif)
 
     restore_technical_metadata(filtered, reference, output, capture)
@@ -55,6 +56,10 @@ def test_restore_uses_capture_source_and_removes_gps(tmp_path: Path) -> None:
     assert metadata["exif"]["DateTimeOriginal"] == "2024:08:23 14:25:23"
     assert "GPSInfo" not in metadata["exif"]
     assert metadata["exif"]["DateTime"].startswith("20")
+    assert metadata["exif_ifds"]["Exif"]["ExifImageWidth"] == 40
+    assert metadata["exif_ifds"]["Exif"]["ExifImageHeight"] == 30
+    assert "SubjectLocation" not in metadata["exif_ifds"]["Exif"]
+    assert "MakerNote" not in metadata["exif_ifds"]["Exif"]
 
 
 def test_restoration_report_has_original_before_after_and_reference_columns(tmp_path: Path) -> None:
@@ -87,3 +92,19 @@ def test_two_image_report_contains_only_filtered_and_reference_columns(tmp_path:
     assert "Variante filtrée — avant" not in content
     assert 'src="assets/after.jpg"' in content
     assert 'src="assets/reference.jpg"' in content
+
+
+def test_report_explains_capture_metadata_restoration(tmp_path: Path) -> None:
+    before, after, reference = [tmp_path / name for name in ("before.jpg", "after.jpg", "reference.jpg")]
+    for path in (before, after, reference):
+        Image.new("RGB", (30, 20), "white").save(path)
+
+    report = generate_restoration_report(
+        before,
+        after,
+        reference,
+        tmp_path / "report",
+        capture_metadata_restored=True,
+    )
+
+    assert "restaure les métadonnées de capture compatibles" in report.read_text(encoding="utf-8")

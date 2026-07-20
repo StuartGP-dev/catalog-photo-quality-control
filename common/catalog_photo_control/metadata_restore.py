@@ -62,6 +62,16 @@ def restore_technical_metadata(
         exif[305] = SOFTWARE_TAG
         exif[531] = 1  # centered YCbCr, like the reference iPhone file
         exif[306] = datetime.now().astimezone().strftime("%Y:%m:%d %H:%M:%S")
+        if capture_source:
+            exif_ifd = exif.get_ifd(34665)
+            # These values describe the rendered JPEG, not the capture source.
+            exif_ifd[40962] = image.width
+            exif_ifd[40963] = image.height
+            # Apple MakerNote and subject coordinates are tied to the reference
+            # file's sensor data and dimensions, so they cannot be transplanted.
+            exif_ifd.pop(37500, None)
+            exif_ifd.pop(37396, None)
+            exif_ifd.pop(41492, None)
         image.save(
             output,
             format="JPEG",
@@ -105,6 +115,7 @@ def generate_restoration_report(
     output_dir: str | Path,
     original_path: str | Path | None = None,
     two_image_comparison: bool = False,
+    capture_metadata_restored: bool = False,
 ) -> Path:
     destination = Path(output_dir).resolve()
     destination.mkdir(parents=True, exist_ok=True)
@@ -145,7 +156,7 @@ def generate_restoration_report(
         f'''<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Métadonnées avant/après</title><style>
 body{{font:14px system-ui;background:#f3f4f6;margin:1.5rem;color:#111827}}main{{max-width:1500px;margin:auto}}section{{background:#fff;padding:1rem;margin:1rem 0;border-radius:10px}}.images{{display:grid;grid-template-columns:1fr 1fr;gap:1rem}}img{{width:100%;height:520px;object-fit:contain;background:#eee}}table{{width:100%;border-collapse:collapse}}th,td{{border:1px solid #d1d5db;padding:.5rem;text-align:left;vertical-align:top}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;margin:0}}@media(max-width:850px){{.images{{grid-template-columns:1fr}}}}</style></head><body><main>
 <h1>Variante filtrée — métadonnées avant/après</h1>
-<section><p>La copie « après » utilise le profil Display P3 et la résolution technique de la référence iPhone. Les pixels ont été convertis correctement vers ce profil. Les champs de provenance de prise de vue — appareil, objectif, date et GPS — ne sont pas falsifiés.</p></section>
+<section><p>{"La copie « après » utilise le profil Display P3 et restaure les métadonnées de capture compatibles de la référence iPhone 15 (appareil, objectif et réglages de prise de vue). Le GPS, les coordonnées de sujet et les notes constructeur liées au fichier de référence sont exclus." if capture_metadata_restored else "La copie « après » utilise le profil Display P3 et la résolution technique de la référence iPhone. Les pixels ont été convertis correctement vers ce profil. Les champs de provenance de prise de vue — appareil, objectif, date et GPS — ne sont pas falsifiés."}</p></section>
 <section class="images">{image_panel}</section>
 <section><h2>Tableau comparatif complet des métadonnées</h2><p>Il reprend la matrice du rapport précédent et ajoute la variante après traitement. « — » signifie que la propriété est absente.</p><table>{_comparison_matrix(matrix_images)}</table></section>
 {'' if two_image_comparison else f'<section><h2>Tableau des modifications</h2><table><thead><tr><th>Propriété</th><th>Avant</th><th>Après</th><th>Modification</th></tr></thead><tbody>{_change_table(before, after)}</tbody></table></section>'}
@@ -174,6 +185,7 @@ def main(argv: list[str] | None = None) -> int:
         args.report_dir,
         original_path=args.original,
         two_image_comparison=args.two_image_report,
+        capture_metadata_restored=bool(args.capture_metadata),
     )
     print(f"image={restored}")
     print(f"report={report}")
