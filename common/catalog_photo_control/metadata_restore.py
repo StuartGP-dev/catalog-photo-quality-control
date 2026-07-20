@@ -62,6 +62,14 @@ def _copy_zone_identifier(reference: Path, output: Path) -> None:
         return
 
 
+def _remove_zone_identifier(output: Path) -> None:
+    """Remove a stale Windows download-origin stream from the generated output."""
+    try:
+        Path(f"{output}:Zone.Identifier").unlink()
+    except OSError:
+        return
+
+
 def _scaled_subject_area(
     value: object,
     reference_size: tuple[int, int],
@@ -88,6 +96,7 @@ def restore_technical_metadata(
     strip_capture_metadata: bool = False,
     copy_reference_specific_metadata: bool = False,
     software_tag: str = SOFTWARE_TAG,
+    capture_overrides: Mapping[int, object] | None = None,
 ) -> Path:
     """Create a new image with technical metadata selected from the reference."""
     source = Path(source_path).resolve()
@@ -147,6 +156,8 @@ def restore_technical_metadata(
                 exif_ifd.pop(37500, None)
                 exif_ifd.pop(37396, None)
                 exif_ifd.pop(41492, None)
+            if capture_overrides:
+                exif_ifd.update(capture_overrides)
         image.save(
             output,
             format="JPEG",
@@ -179,6 +190,8 @@ def restore_technical_metadata(
         if copy_reference_specific_metadata:
             _copy_raw_mpf(reference, output)
             _copy_zone_identifier(reference, output)
+        else:
+            _remove_zone_identifier(output)
     return output
 
 
