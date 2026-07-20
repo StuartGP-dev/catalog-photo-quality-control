@@ -271,7 +271,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument(
         "--metadata-reference",
-        help="Reference JPEG for ICC/resolution metadata on selected generated copies.",
+        help="Reference JPEG for ICC/resolution and Make/Model/Software/HostComputer tags.",
     )
     return parser
 

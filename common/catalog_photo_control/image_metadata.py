@@ -136,6 +136,8 @@ def write_variant_image_metadata(database_path: str | Path, variant_id: int) -> 
 def apply_reference_to_ready_variants(
     database_path: str | Path,
     reference_path: str | Path,
+    *,
+    force: bool = False,
 ) -> tuple[int, int]:
     """Backfill technical metadata on ready generated copies not yet processed."""
     from .variants_db import VariantsDatabase
@@ -150,8 +152,9 @@ def apply_reference_to_ready_variants(
             """SELECT image.variant_id, image.image_index, image.output_path
                FROM listing_variant_images image
                JOIN listing_variants variant USING(variant_id)
-               WHERE variant.status='ready' AND image.metadata_status!='stored'
-               ORDER BY image.variant_id, image.image_index"""
+               WHERE variant.status='ready' AND (? OR image.metadata_status!='stored')
+               ORDER BY image.variant_id, image.image_index""",
+            (int(force),),
         ).fetchall()
         if not rows:
             return 0, 0
@@ -199,7 +202,7 @@ def apply_reference_to_ready_variants(
                        SET metadata_json=?, metadata_status='stored'
                        WHERE variant_id=?""",
                     [
-                        (canonical_json({"policy": "technical_only", "image_count": sum(payload[2] == variant_id for payload in payloads)}), variant_id)
+                        (canonical_json({"policy": "technical_plus_reference_identity", "image_count": sum(payload[2] == variant_id for payload in payloads)}), variant_id)
                         for variant_id in variant_ids
                     ],
                 )
@@ -217,9 +220,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--database", required=True)
     parser.add_argument("--variant-id", type=int)
     parser.add_argument("--reference", help="Backfill all unprocessed ready variants using this JPEG.")
+    parser.add_argument("--force", action="store_true", help="Reapply metadata to variants already marked stored.")
     args = parser.parse_args(argv)
     if args.reference:
-        variants, images = apply_reference_to_ready_variants(args.database, args.reference)
+        variants, images = apply_reference_to_ready_variants(args.database, args.reference, force=args.force)
         print(f"updated_variants={variants}")
         print(f"updated_images={images}")
     elif args.variant_id is not None:

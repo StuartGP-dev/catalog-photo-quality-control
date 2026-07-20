@@ -34,15 +34,33 @@ def _is_icc(segment: bytes) -> bool:
     return segment.startswith(b"\xff\xe2") and segment[4:16] == b"ICC_PROFILE\x00"
 
 
+def _reference_identity_exif(reference: Path) -> bytes | None:
+    """Build a minimal EXIF block from four explicitly allowed identity tags."""
+    allowed_tags = (271, 272, 305, 316)  # Make, Model, Software, HostComputer
+    with Image.open(reference) as image:
+        source_exif = image.getexif()
+        copied = Image.Exif()
+        for tag in allowed_tags:
+            value = source_exif.get(tag)
+            if isinstance(value, str) and value:
+                copied[tag] = value
+    if not copied:
+        return None
+    payload = copied.tobytes()
+    if len(payload) + 2 > 65535:
+        raise ValueError("reference identity EXIF block is too large")
+    return b"\xff\xe1" + (len(payload) + 2).to_bytes(2, "big") + payload
+
+
 def apply_standard_metadata(
     input_path: str | Path,
     reference_path: str | Path,
     output_path: str | Path,
 ) -> Path:
-    """Write a new JPEG with reference technical metadata and no capture provenance.
+    """Write a new JPEG with technical metadata and four reference identity tags.
 
-    Only the color profile and resolution are copied. Camera, lens, date, GPS,
-    maker-note and other capture fields are deliberately omitted.
+    ICC, resolution, Make, Model, Software and HostComputer are copied. Lens,
+    date, GPS, maker-note and capture settings are deliberately omitted.
     """
     source = Path(input_path).resolve()
     reference = Path(reference_path).resolve()
@@ -59,13 +77,18 @@ def apply_standard_metadata(
         (segment for segment in reference_segments if segment.startswith(b"\xff\xe0") and segment[4:9] == b"JFIF\x00"),
         None,
     )
+    identity_exif = _reference_identity_exif(reference)
     kept = [
         segment for segment in source_segments
         if not segment.startswith(b"\xff\xe1")  # EXIF/XMP capture provenance
         and not _is_icc(segment)
         and not (reference_jfif is not None and segment.startswith(b"\xff\xe0") and segment[4:9] == b"JFIF\x00")
     ]
-    technical = ([reference_jfif] if reference_jfif else []) + reference_icc
+    technical = (
+        ([reference_jfif] if reference_jfif else [])
+        + ([identity_exif] if identity_exif else [])
+        + reference_icc
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(b"\xff\xd8" + b"".join(technical + kept) + source_scan)
     with Image.open(output) as verified:
@@ -75,7 +98,7 @@ def apply_standard_metadata(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Apply reference color/resolution metadata without fabricating capture provenance."
+        description="Apply reference ICC/resolution and four explicit device identity tags."
     )
     parser.add_argument("--input", required=True)
     parser.add_argument("--reference", required=True)
@@ -87,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--output must differ from --input")
     result = apply_standard_metadata(input_path, args.reference, output_path)
     print(f"image={result}")
-    print("metadata=icc_profile_and_resolution_only; capture_provenance=omitted")
+    print("metadata=icc_resolution_and_reference_identity; capture_settings=omitted")
     return 0
 
 

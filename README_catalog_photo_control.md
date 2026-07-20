@@ -31,8 +31,8 @@ python -m common.catalog_photo_control.bench `
   --patience 3000
 ```
 
-Pour appliquer aux seules copies sélectionnées le profil ICC et la résolution
-d'une référence, sans copier ni fabriquer de données de capture, ajouter :
+Pour appliquer aux seules copies sélectionnées le profil ICC, la résolution et
+les quatre tags d'identité Make/Model/Software/HostComputer d'une référence :
 
 ```powershell
   --metadata-reference "C:\Users\yanis\Downloads\IMG_3206.jpg"
@@ -172,8 +172,9 @@ python -m common.catalog_photo_control.apply_metadata `
   --output "C:\chemin\image-sortie.jpg"
 ```
 
-Seuls ICC et résolution JFIF sont repris. Les données EXIF/XMP de capture sont
-omises. Pour indexer les métadonnées factuelles de chaque image d'un variant :
+ICC, résolution JFIF, Make, Model, Software et HostComputer sont repris. Date,
+GPS, objectif, ISO, exposition, MakerNote et autres réglages de capture restent
+omis. Pour indexer les métadonnées factuelles de chaque image d'un variant :
 
 ```powershell
 python -m common.catalog_photo_control.image_metadata `

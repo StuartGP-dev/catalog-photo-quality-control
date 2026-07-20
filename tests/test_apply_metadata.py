@@ -24,6 +24,9 @@ def test_applies_only_technical_metadata_without_changing_pixels(tmp_path: Path)
     Image.new("RGB", (64, 48), "white").save(source, exif=source_exif)
     reference_exif = Image.Exif()
     reference_exif[271] = "Reference camera"
+    reference_exif[272] = "Reference model"
+    reference_exif[305] = "Reference software"
+    reference_exif[316] = "Reference host"
     reference_exif[34853] = {1: "N"}
     profile = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
     Image.new("RGB", (20, 20), "blue").save(
@@ -37,11 +40,24 @@ def test_applies_only_technical_metadata_without_changing_pixels(tmp_path: Path)
     assert _pixel_digest(output) == _pixel_digest(source)
     with Image.open(output) as image:
         assert image.info.get("icc_profile") == profile
-        assert not image.getexif()
+        assert {
+            tag: image.getexif().get(tag) for tag in (271, 272, 305, 316)
+        } == {
+            271: "Reference camera",
+            272: "Reference model",
+            305: "Reference software",
+            316: "Reference host",
+        }
     stored = read_image_metadata(output)
     assert stored["icc_profile_present"] is True
     assert stored["width"] == 64 and stored["height"] == 48
-    assert all(not fields for fields in stored["exif"].values())
+    assert stored["exif"]["IFD0"] == {
+        "Make": "Reference camera",
+        "Model": "Reference model",
+        "Software": "Reference software",
+        "HostComputer": "Reference host",
+    }
+    assert all(not stored["exif"][name] for name in ("Exif", "GPSInfo", "Interop", "IFD1"))
 
 
 def test_cli_refuses_in_place_output(tmp_path: Path) -> None:

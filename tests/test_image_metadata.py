@@ -52,6 +52,7 @@ def test_backfills_ready_generated_copies_and_is_idempotent(synthetic_listing: P
 
     assert apply_reference_to_ready_variants(database_path, reference) == (1, len(outputs))
     assert apply_reference_to_ready_variants(database_path, reference) == (0, 0)
+    assert apply_reference_to_ready_variants(database_path, reference, force=True) == (1, len(outputs))
     with VariantsDatabase(database_path) as database:
         rows = database.connection.execute("SELECT output_hash, metadata_status FROM listing_variant_images").fetchall()
         assert all(row[0] != "old" and row[1] == "stored" for row in rows)

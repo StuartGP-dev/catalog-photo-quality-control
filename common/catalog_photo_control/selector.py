@@ -391,7 +391,7 @@ def select_and_persist(
                 diversity_gate_version=str(diversity_config.get("engine_version", "unknown")) if final_diversity else str(selection.candidate.aggregate_metrics.get("diversity_gate_version", "legacy")),
                 diversity_valid=final_diversity.valid if final_diversity else bool(selection.candidate.aggregate_metrics.get("diversity_valid", True)),
                 metadata_json=(
-                    canonical_json({"policy": "technical_only", "image_count": len(final_paths)})
+                    canonical_json({"policy": "technical_plus_reference_identity", "image_count": len(final_paths)})
                     if metadata_reference is not None else None
                 ),
                 metadata_status="stored" if metadata_reference is not None else "reserved",
