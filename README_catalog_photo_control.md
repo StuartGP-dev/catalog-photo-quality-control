@@ -172,6 +172,16 @@ python -m common.catalog_photo_control.image_metadata `
   --variant-id 42
 ```
 
+Sur une base existante, `--metadata-reference` au lancement du benchmark migre
+et traite automatiquement les variants `ready` encore non indexés. Le même
+backfill peut être lancé sans benchmark :
+
+```powershell
+python -m common.catalog_photo_control.image_metadata `
+  --database local\databases\catalog_variants.sqlite3 `
+  --reference "C:\Users\yanis\Downloads\IMG_3206.jpg"
+```
+
 L'utilitaire de confidentialité racine reste disponible et ne modifie pas les
 sources :
 

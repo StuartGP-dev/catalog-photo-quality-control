@@ -19,6 +19,7 @@ from .recipe_learning import listing_context_key, proven_recipes
 from .selector import load_eligible_candidates, select_and_persist
 from .source_loader import load_source_listing, resolve_listing_reference
 from .variants_db import VariantsDatabase
+from .image_metadata import apply_reference_to_ready_variants
 
 
 def classify_stop_reason(
@@ -110,6 +111,12 @@ def run_benchmark(args: argparse.Namespace) -> tuple[str, Path, dict[str, int]]:
         variants.initialize()
         bench.register_source(listing)
         variants.register_source(listing)
+        if args.metadata_reference:
+            backfilled_variants, backfilled_images = apply_reference_to_ready_variants(
+                paths.variants_database, args.metadata_reference
+            )
+            counters["metadata_backfilled_variants"] = backfilled_variants
+            counters["metadata_backfilled_images"] = backfilled_images
         bench.start_run(run_id, listing, args.target_variants, started_at, space.evaluation_config_hash)
         stale = 0
         try:
