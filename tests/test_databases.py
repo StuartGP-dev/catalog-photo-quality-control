@@ -29,6 +29,9 @@ def test_one_command_initializes_both_databases(tmp_path: Path) -> None:
             for row in connection.execute("PRAGMA table_info(listing_variants)")
         }
         assert {"title_text", "description_text", "price_cents", "currency", "metadata_json", "metadata_status"} <= columns
+        assert {"average_ready_distance", "average_distance_rank", "average_distance_components_json"} <= columns
+        image_columns = {row[1] for row in connection.execute("PRAGMA table_info(listing_variant_images)")}
+        assert {"metadata_json", "metadata_status"} <= image_columns
 
 
 def test_duplicate_recipe_test_is_prevented(

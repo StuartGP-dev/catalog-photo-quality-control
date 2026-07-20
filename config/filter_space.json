@@ -1,9 +1,9 @@
 {
-  "version": 4,
+  "version": 5,
   "proposal_allocation": {
-    "random": 0.62,
-    "proven": 0.23,
-    "mutation": 0.15
+    "random": 0.50,
+    "proven": 0.30,
+    "mutation": 0.20
   },
   "quality_thresholds": {
     "minimum_quality": 0.55,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -10,11 +11,13 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .diversity import Distance, listing_distance
-from .models import ListingVariant, Recipe, SourceListing
+from .models import ListingVariant, Recipe, SourceListing, canonical_json
 from .listing_content import load_listing_content, write_variant_content
 from .recipe_learning import refresh_recipe_statistics
 from .recipe_schema import classify_recipe_family
 from .variants_db import VariantsDatabase
+from .apply_metadata import apply_standard_metadata
+from .image_metadata import read_image_metadata
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,6 +214,7 @@ def select_and_persist(
     target_count: int,
     selected_root: str | Path,
     diversity_config: Mapping[str, Any] | None = None,
+    metadata_reference: str | Path | None = None,
 ) -> list[int]:
     listing_content = load_listing_content(listing.directory)
     existing_rows = variants.connection.execute(
@@ -355,6 +359,10 @@ def select_and_persist(
             for image in selection.candidate.images:
                 copied = temporary / image.output_path.name
                 shutil.copy2(image.output_path, copied)
+                if metadata_reference is not None:
+                    staged = copied.with_suffix(copied.suffix + ".metadata")
+                    apply_standard_metadata(copied, metadata_reference, staged)
+                    os.replace(staged, copied)
                 copied_paths.append(copied)
             os.replace(temporary, destination)
             final_paths = tuple(destination / path.name for path in copied_paths)
@@ -388,13 +396,18 @@ def select_and_persist(
                 description_text=listing_content.description,
                 price_cents=listing_content.price_cents,
                 currency=listing_content.currency,
+                metadata_json=(
+                    canonical_json({"policy": "technical_only", "image_count": len(final_paths)})
+                    if metadata_reference is not None else None
+                ),
+                metadata_status="stored" if metadata_reference is not None else "reserved",
             )
             image_rows = [
                 {
                     "image_index": image.image_index,
                     "source_hash": image.source_hash,
                     "output_path": final_path,
-                    "output_hash": image.output_hash,
+                    "output_hash": hashlib.sha256(final_path.read_bytes()).hexdigest(),
                     "metrics": image.metrics,
                     "output_width": int(image.metrics.get("output_width", 1)),
                     "output_height": int(image.metrics.get("output_height", 1)),
@@ -402,6 +415,11 @@ def select_and_persist(
                     "nearest_catalog_json": nearest_to_json(final_diversity.images[position].original) if final_diversity else image.nearest_catalog_json,
                     "reference_count_same_listing": final_diversity.images[position].reference_count if final_diversity else image.reference_count_same_listing,
                     "reference_count_catalog": 0,
+                    "metadata_json": (
+                        canonical_json(read_image_metadata(final_path))
+                        if metadata_reference is not None else None
+                    ),
+                    "metadata_status": "stored" if metadata_reference is not None else "reserved",
                 }
                 for position, (image, final_path) in enumerate(zip(
                     selection.candidate.images, final_paths, strict=True

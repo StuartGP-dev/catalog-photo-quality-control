@@ -23,9 +23,9 @@ def evaluate_quality(
     max_clip = float(thresholds.get("maximum_clip_fraction", 0.2))
     min_sharpness = float(thresholds.get("minimum_sharpness_ratio", 0.35))
     max_sharpness = float(thresholds.get("maximum_sharpness_ratio", 1.8))
-    max_pixel_mae = float(thresholds.get("maximum_pixel_mae", 0.055))
-    max_luminance_mae = float(thresholds.get("maximum_luminance_mae", 0.045))
-    min_ssim = float(thresholds.get("minimum_ssim", 0.97))
+    max_pixel_mae = float(thresholds.get("maximum_pixel_mae", 0.06))
+    max_luminance_mae = float(thresholds.get("maximum_luminance_mae", 0.06))
+    min_ssim = float(thresholds.get("minimum_ssim", 0.90))
     min_geometry_ssim = float(
         thresholds.get("minimum_perceptual_geometry_ssim", min_ssim)
     )

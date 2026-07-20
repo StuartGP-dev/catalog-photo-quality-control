@@ -91,6 +91,11 @@ def write_html_report(
                 ensure_ascii=False,
             )
         )
+        average_components = html.escape(json.dumps(
+            json.loads(variant["average_distance_components_json"]),
+            indent=2,
+            ensure_ascii=False,
+        ))
         folder = html.escape(_relative_link(Path(images[0]["output_path"]).parent, output.parent)) if images else "#"
         limiting = next(((image["image_index"], json.loads(image["nearest_same_listing_json"])) for image in images if json.loads(image["nearest_same_listing_json"])), (None, {}))
         cards.append(
@@ -100,6 +105,8 @@ def write_html_report(
             <p>Quality: {variant['quality_score']:.4f} · Distance from original:
             {variant['distance_from_original']:.4f} · Minimum selected distance:
             {variant['minimum_selected_distance'] if variant['minimum_selected_distance'] is not None else 'seed'}</p>
+            <p>Average ready distance: {variant['average_ready_distance'] if variant['average_ready_distance'] is not None else 'only variant'}
+            · Average-distance rank: {variant['average_distance_rank']}</p>
             <p><strong>Similarité perceptuelle :</strong> moteur {html.escape(variant['diversity_gate_version'])} · validité {bool(variant['diversity_valid'])}.</p>
             <p>Voisin le plus proche affiché : index {limiting[0] if limiting[0] is not None else 'n/a'} · annonce {html.escape(str(limiting[1].get('listing_code', 'n/a')))} / variant {limiting[1].get('variant_id', 'n/a')} · verdict <strong>{html.escape(str(limiting[1].get('verdict', 'no_reference_yet')))}</strong>.</p>
             <p>Minimum SSIM: {aggregate.get('min_ssim', 'n/a')} · Maximum pixel MAE: {aggregate.get('max_pixel_mae', 'n/a')}
@@ -118,6 +125,7 @@ def write_html_report(
             <details><summary>Canonical recipe</summary><pre>{recipe}</pre></details>
             <details><summary>Quality metrics</summary><pre>{metrics}</pre></details>
             <details><summary>Minimum-distance components</summary><pre>{distance_components}</pre></details>
+            <details><summary>Average-distance components</summary><pre>{average_components}</pre></details>
             <dl><dt>Title</dt><dd>{html.escape(variant['title_text'] or 'Reserved')}</dd>
             <dt>Description</dt><dd>{html.escape(variant['description_text'] or 'Reserved')}</dd>
             <dt>Price</dt><dd>{variant['price_cents'] if variant['price_cents'] is not None else 'Reserved'} {html.escape(variant['currency'] or '')}</dd>

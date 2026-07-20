@@ -140,7 +140,7 @@ class RecipeSchema:
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> "RecipeSchema":
-        if raw.get("version") not in {1, 2, 3, 4}:
+        if raw.get("version") not in {1, 2, 3, 4, 5}:
             raise ValueError("unsupported filter space version")
         parameter_data = raw.get("parameters")
         if not isinstance(parameter_data, Mapping) or not parameter_data:
@@ -157,7 +157,7 @@ class RecipeSchema:
             parameters,
             tuple(rules),
             int(quality.get("maximum_active_parameters", 4)),
-            float(quality.get("maximum_recipe_intensity", 1.35)),
+            float(quality.get("maximum_recipe_intensity", 1.2)),
             float(raw.get("geometry_template_probability", 0.0)),
         )
         if not 0 <= schema.geometry_template_probability <= 1:

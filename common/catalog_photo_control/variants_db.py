@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterator, Mapping, Sequence
 
 from .models import ListingVariant, SourceListing, canonical_json
+from .diversity import listing_distance
 from .recipe_schema import classify_recipe_family
 
 
@@ -49,6 +50,9 @@ CREATE TABLE IF NOT EXISTS listing_variants (
     distance_from_original REAL NOT NULL DEFAULT 0,
     minimum_selected_distance REAL,
     minimum_distance_components_json TEXT NOT NULL DEFAULT '{}',
+    average_ready_distance REAL,
+    average_distance_rank INTEGER CHECK(average_distance_rank IS NULL OR average_distance_rank > 0),
+    average_distance_components_json TEXT NOT NULL DEFAULT '{}',
     minimum_same_listing_distance REAL,
     minimum_catalog_distance REAL,
     diversity_gate_version TEXT NOT NULL DEFAULT 'legacy',
@@ -68,6 +72,8 @@ CREATE TABLE IF NOT EXISTS listing_variant_images (
     output_width INTEGER NOT NULL DEFAULT 1,
     output_height INTEGER NOT NULL DEFAULT 1,
     metrics_json TEXT NOT NULL,
+    metadata_json TEXT,
+    metadata_status TEXT NOT NULL DEFAULT 'reserved',
     nearest_same_listing_json TEXT NOT NULL DEFAULT '{}',
     nearest_catalog_json TEXT NOT NULL DEFAULT '{}',
     reference_count_same_listing INTEGER NOT NULL DEFAULT 0,
@@ -151,12 +157,17 @@ class VariantsDatabase:
                 )
         additions = {
             "listing_variants": {
+                "average_ready_distance": "REAL",
+                "average_distance_rank": "INTEGER",
+                "average_distance_components_json": "TEXT NOT NULL DEFAULT '{}'",
                 "minimum_same_listing_distance": "REAL",
                 "minimum_catalog_distance": "REAL",
                 "diversity_gate_version": "TEXT NOT NULL DEFAULT 'legacy'",
                 "diversity_valid": "INTEGER NOT NULL DEFAULT 1",
             },
             "listing_variant_images": {
+                "metadata_json": "TEXT",
+                "metadata_status": "TEXT NOT NULL DEFAULT 'reserved'",
                 "nearest_same_listing_json": "TEXT NOT NULL DEFAULT '{}'",
                 "nearest_catalog_json": "TEXT NOT NULL DEFAULT '{}'",
                 "reference_count_same_listing": "INTEGER NOT NULL DEFAULT 0",
@@ -206,7 +217,52 @@ class VariantsDatabase:
                 ) THEN RAISE(ABORT, 'variant image coverage mismatch') END;
             END;"""
         )
+        for row in self.connection.execute(
+            "SELECT DISTINCT listing_id FROM listing_variants WHERE status='ready'"
+        ).fetchall():
+            self._refresh_average_distances(self.connection, str(row[0]))
         self.connection.commit()
+
+    def _refresh_average_distances(self, connection: sqlite3.Connection, listing_id: str) -> None:
+        rows = connection.execute(
+            """SELECT variant_id, aggregate_metrics_json
+               FROM listing_variants
+               WHERE listing_id=? AND status='ready'""",
+            (listing_id,),
+        ).fetchall()
+        calculated: list[tuple[int, float | None, dict[str, float]]] = []
+        for row in rows:
+            distances = [
+                listing_distance(
+                    json.loads(row["aggregate_metrics_json"]),
+                    json.loads(other["aggregate_metrics_json"]),
+                )
+                for other in rows
+                if other["variant_id"] != row["variant_id"]
+            ]
+            if not distances:
+                calculated.append((int(row["variant_id"]), None, {}))
+                continue
+            component_names = sorted({name for distance in distances for name in distance.components})
+            components = {
+                name: sum(distance.components.get(name, 0.0) for distance in distances) / len(distances)
+                for name in component_names
+            }
+            calculated.append(
+                (int(row["variant_id"]), sum(distance.total for distance in distances) / len(distances), components)
+            )
+        ranked = sorted(calculated, key=lambda item: (-(item[1] if item[1] is not None else -1.0), item[0]))
+        ranks = {variant_id: rank for rank, (variant_id, _, _) in enumerate(ranked, start=1)}
+        connection.executemany(
+            """UPDATE listing_variants
+               SET average_ready_distance=?, average_distance_rank=?,
+                   average_distance_components_json=?
+               WHERE variant_id=?""",
+            [
+                (average, ranks[variant_id], canonical_json(components), variant_id)
+                for variant_id, average, components in calculated
+            ],
+        )
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -291,9 +347,10 @@ class VariantsDatabase:
                     description_text, price_cents, currency, metadata_json,
                     metadata_status, aggregate_metrics_json, quality_score,
                     distance_from_original, minimum_selected_distance,
-                    minimum_distance_components_json, minimum_same_listing_distance,
+                    minimum_distance_components_json, average_ready_distance,
+                    average_distance_rank, average_distance_components_json, minimum_same_listing_distance,
                     minimum_catalog_distance, diversity_gate_version, diversity_valid)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     variant.listing_id,
                     variant.source_set_hash,
@@ -314,6 +371,9 @@ class VariantsDatabase:
                     variant.distance_from_original,
                     variant.minimum_selected_distance,
                     canonical_json(variant.minimum_distance_components),
+                    variant.average_ready_distance,
+                    variant.average_distance_rank,
+                    canonical_json(variant.average_distance_components),
                     variant.minimum_same_listing_distance,
                     variant.minimum_catalog_distance,
                     variant.diversity_gate_version,
@@ -325,9 +385,10 @@ class VariantsDatabase:
                 """INSERT INTO listing_variant_images
                    (variant_id, image_index, source_hash, output_path, output_hash,
                     metrics_json, output_width, output_height,
+                    metadata_json, metadata_status,
                     nearest_same_listing_json, nearest_catalog_json,
                     reference_count_same_listing, reference_count_catalog)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
                     (
                         variant_id,
@@ -338,6 +399,8 @@ class VariantsDatabase:
                         canonical_json(row.get("metrics", {})),
                         int(row.get("output_width", row.get("metrics", {}).get("output_width", 1))),
                         int(row.get("output_height", row.get("metrics", {}).get("output_height", 1))),
+                        row.get("metadata_json"),
+                        str(row.get("metadata_status", "reserved")),
                         str(row.get("nearest_same_listing_json", "{}")),
                         str(row.get("nearest_catalog_json", "{}")),
                         int(row.get("reference_count_same_listing", 0)),
@@ -350,4 +413,5 @@ class VariantsDatabase:
                 "UPDATE listing_variants SET status='ready' WHERE variant_id=?",
                 (variant_id,),
             )
+            self._refresh_average_distances(connection, variant.listing_id)
         return variant_id

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PIL import Image
+
 from common.catalog_photo_control.bench_db import BenchDatabase
 from common.catalog_photo_control.config import load_filter_space
 from common.catalog_photo_control.models import Recipe
@@ -84,8 +86,11 @@ def test_complete_selection_resumes_and_stops_at_target(
     second_ids = select_and_persist(
         bench.connection, variants, listing, 2, tmp_path / "selected"
     )
+    metadata_reference = tmp_path / "metadata-reference.jpg"
+    Image.new("RGB", (8, 8), "white").save(metadata_reference, dpi=(240, 240))
     third_ids = select_and_persist(
-        bench.connection, variants, listing, 3, tmp_path / "selected"
+        bench.connection, variants, listing, 3, tmp_path / "selected",
+        metadata_reference=metadata_reference,
     )
 
     assert len(first_ids) == 2
@@ -105,5 +110,15 @@ def test_complete_selection_resumes_and_stops_at_target(
     assert bench.connection.execute(
         "SELECT COUNT(*) FROM recipe_pair_distances"
     ).fetchone()[0] == 3
+    distance_rows = variants.connection.execute(
+        "SELECT average_ready_distance, average_distance_rank, average_distance_components_json FROM listing_variants ORDER BY average_distance_rank"
+    ).fetchall()
+    assert [row[1] for row in distance_rows] == [1, 2, 3]
+    assert all(row[0] is not None and row[2] != "{}" for row in distance_rows)
+    metadata_rows = variants.connection.execute(
+        "SELECT metadata_status, metadata_json FROM listing_variant_images WHERE variant_id=?",
+        (third_ids[0],),
+    ).fetchall()
+    assert all(row[0] == "stored" and row[1] for row in metadata_rows)
     bench.close()
     variants.close()

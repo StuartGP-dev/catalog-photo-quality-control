@@ -134,6 +134,7 @@ def run_benchmark(args: argparse.Namespace) -> tuple[str, Path, dict[str, int]]:
                             args.target_variants,
                             selected_root,
                             space.diversity_gate,
+                            args.metadata_reference,
                         )
                         counters["selected"] += len(new_ids)
                         selected_count = variants.ready_count(
@@ -192,6 +193,7 @@ def run_benchmark(args: argparse.Namespace) -> tuple[str, Path, dict[str, int]]:
                         args.target_variants,
                         selected_root,
                         space.diversity_gate,
+                        args.metadata_reference,
                     )
                     counters["selected"] += len(new_ids)
                     counters["canvas_selected"] = counters.get("canvas_selected", 0) + sum(1 for variant_id in new_ids if variants.connection.execute("SELECT recipe_json FROM listing_variants WHERE variant_id=?", (variant_id,)).fetchone()[0].find('"canvas_mode":"none"') < 0)
@@ -260,6 +262,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--proven-share", type=float)
     parser.add_argument("--mutation-share", type=float)
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument(
+        "--metadata-reference",
+        help="Reference JPEG for ICC/resolution metadata on selected generated copies.",
+    )
     return parser
 
 

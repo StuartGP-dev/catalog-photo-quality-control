@@ -106,6 +106,9 @@ class ListingVariant:
     distance_from_original: float = 0.0
     minimum_selected_distance: float | None = None
     minimum_distance_components: Mapping[str, float] = field(default_factory=dict)
+    average_ready_distance: float | None = None
+    average_distance_rank: int | None = None
+    average_distance_components: Mapping[str, float] = field(default_factory=dict)
     recipe_family: str = "appearance_only"
     minimum_same_listing_distance: float | None = None
     minimum_catalog_distance: float | None = None
