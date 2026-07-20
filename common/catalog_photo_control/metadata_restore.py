@@ -36,6 +36,7 @@ def restore_technical_metadata(
     reference_path: str | Path,
     output_path: str | Path,
     capture_metadata_path: str | Path | None = None,
+    strip_capture_metadata: bool = False,
 ) -> Path:
     """Create a new image with compatible technical metadata, without forging capture provenance."""
     source = Path(source_path).resolve()
@@ -65,7 +66,7 @@ def restore_technical_metadata(
                 outputMode="RGB",
             )
 
-        exif = capture_opened.getexif()
+        exif = Image.Exif() if strip_capture_metadata else capture_opened.getexif()
         # GPS is intentionally omitted even when it exists in the capture source.
         if 34853 in exif:
             del exif[34853]
