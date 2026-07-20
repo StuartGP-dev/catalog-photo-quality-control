@@ -16,6 +16,10 @@ from .metadata_diagnostic import _comparison_matrix, _flatten_metadata, inspect_
 
 
 SOFTWARE_TAG = "Catalog Photo Control; pixels transformed from a filtered catalogue image"
+COMPOSITE_IMAGE_TAG = 42080
+
+# piexif predates this EXIF 2.32 tag, but can preserve it once its type is known.
+piexif.TAGS["Exif"].setdefault(COMPOSITE_IMAGE_TAG, {"name": "CompositeImage", "type": 3})
 
 
 def _ensure_jfif_300_dpi(path: Path) -> None:
@@ -31,14 +35,61 @@ def _ensure_jfif_300_dpi(path: Path) -> None:
     path.write_bytes(data)
 
 
+def _copy_raw_mpf(reference: Path, output: Path) -> None:
+    """Copy the reference MPF block verbatim; its image offsets remain reference-specific."""
+    with Image.open(reference) as reference_opened:
+        mp = reference_opened.info.get("mp")
+    if not mp:
+        return
+    data = output.read_bytes()
+    if not data.startswith(b"\xff\xd8"):
+        raise ValueError(f"not a JPEG file: {output}")
+    payload = b"MPF\x00" + mp
+    segment = b"\xff\xe2" + (len(payload) + 2).to_bytes(2, "big") + payload
+    insert_at = 2
+    if data[2:4] == b"\xff\xe0":
+        insert_at = 4 + int.from_bytes(data[4:6], "big")
+    output.write_bytes(data[:insert_at] + segment + data[insert_at:])
+
+
+def _copy_zone_identifier(reference: Path, output: Path) -> None:
+    """Copy the Windows download-origin alternate data stream when available."""
+    try:
+        payload = Path(f"{reference}:Zone.Identifier").read_bytes()
+        Path(f"{output}:Zone.Identifier").write_bytes(payload)
+    except OSError:
+        # Alternate data streams are unavailable on non-NTFS filesystems.
+        return
+
+
+def _scaled_subject_area(
+    value: object,
+    reference_size: tuple[int, int],
+    output_size: tuple[int, int],
+) -> tuple[int, ...] | None:
+    if not isinstance(value, (tuple, list)) or len(value) not in (2, 3, 4):
+        return None
+    ref_width, ref_height = reference_size
+    out_width, out_height = output_size
+    scaled = []
+    for index, item in enumerate(value):
+        if not isinstance(item, (int, float)):
+            return None
+        axis_scale = out_width / ref_width if index % 2 == 0 else out_height / ref_height
+        scaled.append(max(1, round(item * axis_scale)))
+    return tuple(scaled)
+
+
 def restore_technical_metadata(
     source_path: str | Path,
     reference_path: str | Path,
     output_path: str | Path,
     capture_metadata_path: str | Path | None = None,
     strip_capture_metadata: bool = False,
+    copy_reference_specific_metadata: bool = False,
+    software_tag: str = SOFTWARE_TAG,
 ) -> Path:
-    """Create a new image with compatible technical metadata, without forging capture provenance."""
+    """Create a new image with technical metadata selected from the reference."""
     source = Path(source_path).resolve()
     reference = Path(reference_path).resolve()
     output = Path(output_path).resolve()
@@ -74,7 +125,7 @@ def restore_technical_metadata(
         exif[282] = 72
         exif[283] = 72
         exif[296] = 2  # inches
-        exif[305] = SOFTWARE_TAG
+        exif[305] = software_tag
         exif[531] = 1  # centered YCbCr, like the reference iPhone file
         exif[306] = datetime.now().astimezone().strftime("%Y:%m:%d %H:%M:%S")
         if capture_source:
@@ -82,11 +133,20 @@ def restore_technical_metadata(
             # These values describe the rendered JPEG, not the capture source.
             exif_ifd[40962] = image.width
             exif_ifd[40963] = image.height
-            # Apple MakerNote and subject coordinates are tied to the reference
-            # file's sensor data and dimensions, so they cannot be transplanted.
-            exif_ifd.pop(37500, None)
-            exif_ifd.pop(37396, None)
-            exif_ifd.pop(41492, None)
+            if copy_reference_specific_metadata:
+                subject = exif_ifd.get(37396) or exif_ifd.get(41492)
+                scaled_subject = _scaled_subject_area(
+                    subject, capture_opened.size, image.size
+                )
+                exif_ifd.pop(41492, None)
+                if scaled_subject:
+                    exif_ifd[37396] = scaled_subject
+            else:
+                # Apple MakerNote and subject coordinates are tied to the
+                # reference sensor data and dimensions.
+                exif_ifd.pop(37500, None)
+                exif_ifd.pop(37396, None)
+                exif_ifd.pop(41492, None)
         image.save(
             output,
             format="JPEG",
@@ -116,6 +176,9 @@ def restore_technical_metadata(
         })
         piexif.insert(piexif.dump(exif_dict), str(output))
         _ensure_jfif_300_dpi(output)
+        if copy_reference_specific_metadata:
+            _copy_raw_mpf(reference, output)
+            _copy_zone_identifier(reference, output)
     return output
 
 

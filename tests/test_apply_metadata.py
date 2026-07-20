@@ -1,9 +1,24 @@
+import os
 from pathlib import Path
 
 from PIL import Image, ImageCms
 
 from common.catalog_photo_control.apply_metadata import apply_standard_metadata, main
 from common.catalog_photo_control.metadata_diagnostic import inspect_image_metadata
+
+
+def _add_synthetic_mpf(path: Path) -> bytes:
+    mp = bytes.fromhex(
+        "4d4d002a000000080003b00000070000000430313030"
+        "b00100040000000100000002b00200070000002000000032"
+        "000000000003000000000000000000000000000000000000"
+        "00000000000000000000000000000000"
+    )
+    payload = b"MPF\x00" + mp
+    segment = b"\xff\xe2" + (len(payload) + 2).to_bytes(2, "big") + payload
+    data = path.read_bytes()
+    path.write_bytes(data[:2] + segment + data[2:])
+    return mp
 
 
 def test_apply_standard_metadata_to_arbitrary_image(tmp_path: Path) -> None:
@@ -31,10 +46,15 @@ def test_apply_standard_metadata_to_arbitrary_image(tmp_path: Path) -> None:
         40963: 4284,
         42035: "Apple",
         42036: "iPhone 15 back dual wide camera 5.96mm f/1.6",
+        42080: 2,
         37500: b"reference-specific-maker-note",
-        37396: (2846, 2130, 3129, 1880),
+        37396: (10, 10, 5, 5),
     }
     Image.new("RGB", (20, 20), "blue").save(reference, icc_profile=profile, exif=reference_exif)
+    reference_mp = _add_synthetic_mpf(reference)
+    zone_payload = b"[ZoneTransfer]\r\nZoneId=3\r\n"
+    if os.name == "nt":
+        Path(f"{reference}:Zone.Identifier").write_bytes(zone_payload)
     original = source.read_bytes()
 
     apply_standard_metadata(source, reference, output)
@@ -51,6 +71,7 @@ def test_apply_standard_metadata_to_arbitrary_image(tmp_path: Path) -> None:
     assert metadata["exif"]["Make"] == "Apple"
     assert metadata["exif"]["Model"] == "iPhone 15"
     assert metadata["exif"]["HostComputer"] == "iPhone 15"
+    assert metadata["exif"]["Software"] == "17.6.1"
     assert "GPSInfo" not in metadata["exif"]
     capture = metadata["exif_ifds"]["Exif"]
     assert capture["LensMake"] == "Apple"
@@ -62,8 +83,12 @@ def test_apply_standard_metadata_to_arbitrary_image(tmp_path: Path) -> None:
     assert capture["DateTimeOriginal"] == "2026:07:18 15:54:34"
     assert capture["ExifImageWidth"] == 64
     assert capture["ExifImageHeight"] == 48
-    assert "MakerNote" not in capture
-    assert "SubjectLocation" not in capture
+    assert capture["CompositeImage"] == 2
+    assert capture["MakerNote"]["byte_length"] == len(b"reference-specific-maker-note")
+    assert capture["SubjectLocation"] == [32, 24, 16, 12]
+    assert metadata["embedded_info"]["mp"]["byte_length"] == len(reference_mp)
+    if os.name == "nt":
+        assert Path(f"{output}:Zone.Identifier").read_bytes() == zone_payload
 
 
 def test_apply_metadata_cli_refuses_in_place_output(tmp_path: Path) -> None:

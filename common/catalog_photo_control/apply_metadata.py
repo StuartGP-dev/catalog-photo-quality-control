@@ -17,6 +17,8 @@ def apply_standard_metadata(
         reference_path,
         output_path,
         capture_metadata_path=reference_path,
+        copy_reference_specific_metadata=True,
+        software_tag="17.6.1",
     )
 
 
@@ -41,6 +43,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--output must differ from --input")
     result = apply_standard_metadata(input_path, args.reference, output_path)
     print(f"image={result}")
+    print(
+        "warning=MakerNote, MPF, and Zone.Identifier are copied verbatim from the reference; "
+        "the MPF second-image offsets do not describe the generated JPEG."
+    )
     return 0
 
 
