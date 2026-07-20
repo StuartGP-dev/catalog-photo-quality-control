@@ -1,108 +1,179 @@
 from __future__ import annotations
 
 import argparse
+import math
+import random
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from PIL import Image
+import numpy as np
+from PIL import Image, ImageOps, TiffImagePlugin
+
+from .metadata_restore import restore_technical_metadata
 
 
-def _segments(data: bytes) -> tuple[list[bytes], bytes]:
-    if not data.startswith(b"\xff\xd8"):
-        raise ValueError("only JPEG inputs are supported")
-    segments: list[bytes] = []
-    offset = 2
-    while offset + 1 < len(data):
-        if data[offset] != 0xFF:
-            raise ValueError("invalid JPEG marker stream")
-        marker = data[offset + 1]
-        if marker == 0xDA:  # Start of scan: the remainder is entropy-coded data.
-            length = int.from_bytes(data[offset + 2:offset + 4], "big")
-            end = offset + 2 + length
-            return segments, data[offset:end] + data[end:]
-        if marker == 0xD9:
-            return segments, data[offset:]
-        length = int.from_bytes(data[offset + 2:offset + 4], "big")
-        end = offset + 2 + length
-        if length < 2 or end > len(data):
-            raise ValueError("invalid JPEG segment length")
-        segments.append(data[offset:end])
-        offset = end
-    raise ValueError("JPEG has no image scan")
+ISO_VALUES = (50, 64, 80, 100, 125, 160, 200, 250, 320, 400, 500, 640, 800)
+EXPOSURE_DENOMINATOR_RANGE = (30, 2000)
+BRIGHTNESS_VALUE_RANGE = (-2.0, 9.0)
+BRIGHTNESS_EXPOSURE_JITTER_RANGE = (-0.25, 0.25)
+BRIGHTNESS_MIDDLE_GRAY = 0.18
+BRIGHTNESS_MIDDLE_GRAY_VALUE = 5.0
+FLASH_VALUES = (16, 24)
+METERING_MODE_VALUES = (3, 5)
+EXPOSURE_MODE_VALUES = (0, 1)
+EXPOSURE_PROGRAM_VALUES = (1, 2, 3)
+WHITE_BALANCE_VALUES = (0, 1)
+ULTRAWIDE_FOCAL_RANGE = (1.50, 1.58)
+WIDE_FOCAL_RANGE = (5.90, 6.02)
+ULTRAWIDE_APERTURE_RANGE = (2.35, 2.45)
+WIDE_APERTURE_RANGE = (1.55, 1.65)
+ULTRAWIDE_35MM_RANGE = (12, 14)
+WIDE_35MM_RANGE = (25, 27)
+CAPTURE_AGE_DAYS_RANGE = (0.0, 7.0)
 
 
-def _is_icc(segment: bytes) -> bool:
-    return segment.startswith(b"\xff\xe2") and segment[4:16] == b"ICC_PROFILE\x00"
+def _rational(value: float, denominator: int = 1_000_000) -> TiffImagePlugin.IFDRational:
+    return TiffImagePlugin.IFDRational(round(value * denominator), denominator)
 
 
-def _reference_identity_exif(reference: Path) -> bytes | None:
-    """Build a minimal EXIF block from four explicitly allowed identity tags."""
-    allowed_tags = (271, 272, 305, 316)  # Make, Model, Software, HostComputer
-    with Image.open(reference) as image:
-        source_exif = image.getexif()
-        copied = Image.Exif()
-        for tag in allowed_tags:
-            value = source_exif.get(tag)
-            if isinstance(value, str) and value:
-                copied[tag] = value
-    if not copied:
-        return None
-    payload = copied.tobytes()
-    if len(payload) + 2 > 65535:
-        raise ValueError("reference identity EXIF block is too large")
-    return b"\xff\xe1" + (len(payload) + 2).to_bytes(2, "big") + payload
+def _estimate_brightness_value(path: Path) -> float:
+    """Estimate scene brightness from mean linear-light luminance."""
+    with Image.open(path) as opened:
+        image = ImageOps.exif_transpose(opened).convert("RGB")
+    thumbnail = image.copy()
+    thumbnail.thumbnail((256, 256), Image.Resampling.LANCZOS)
+    pixels = np.asarray(thumbnail, dtype=np.float64) / 255.0
+    linear = np.where(
+        pixels <= 0.04045,
+        pixels / 12.92,
+        ((pixels + 0.055) / 1.055) ** 2.4,
+    )
+    luminance = 0.2126 * linear[:, :, 0] + 0.7152 * linear[:, :, 1] + 0.0722 * linear[:, :, 2]
+    mean_luminance = max(float(luminance.mean()), 1e-6)
+    brightness = math.log2(mean_luminance / BRIGHTNESS_MIDDLE_GRAY)
+    brightness += BRIGHTNESS_MIDDLE_GRAY_VALUE
+    return min(max(brightness, BRIGHTNESS_VALUE_RANGE[0]), BRIGHTNESS_VALUE_RANGE[1])
+
+
+def _random_capture_overrides(
+    input_path: Path,
+    rng: random.Random,
+) -> tuple[dict[int, object], dict[int, object]]:
+    use_wide = bool(rng.getrandbits(1))
+    if use_wide:
+        focal_length = rng.uniform(*WIDE_FOCAL_RANGE)
+        f_number = rng.uniform(*WIDE_APERTURE_RANGE)
+        focal_35mm = rng.randint(*WIDE_35MM_RANGE)
+    else:
+        focal_length = rng.uniform(*ULTRAWIDE_FOCAL_RANGE)
+        f_number = rng.uniform(*ULTRAWIDE_APERTURE_RANGE)
+        focal_35mm = rng.randint(*ULTRAWIDE_35MM_RANGE)
+    aperture_value = math.log2(f_number * f_number)
+    target_brightness = _estimate_brightness_value(input_path)
+    target_brightness += rng.uniform(*BRIGHTNESS_EXPOSURE_JITTER_RANGE)
+    exposure_candidates = []
+    for candidate_iso in ISO_VALUES:
+        sensitivity = math.log2(candidate_iso / 3.125)
+        candidate_denominator = round(2 ** (target_brightness + sensitivity - aperture_value))
+        if EXPOSURE_DENOMINATOR_RANGE[0] <= candidate_denominator <= EXPOSURE_DENOMINATOR_RANGE[1]:
+            exposure_candidates.append((candidate_iso, candidate_denominator))
+    if exposure_candidates:
+        iso, denominator = rng.choice(exposure_candidates)
+    else:
+        iso = ISO_VALUES[0]
+        sensitivity = math.log2(iso / 3.125)
+        denominator = round(2 ** (target_brightness + sensitivity - aperture_value))
+        denominator = min(max(denominator, EXPOSURE_DENOMINATOR_RANGE[0]), EXPOSURE_DENOMINATOR_RANGE[1])
+    exposure_time = 1.0 / denominator
+    shutter_speed = math.log2(denominator)
+    sensitivity_value = math.log2(iso / 3.125)
+    brightness = aperture_value + shutter_speed - sensitivity_value
+    min_focal = rng.uniform(*ULTRAWIDE_FOCAL_RANGE)
+    max_focal = rng.uniform(*WIDE_FOCAL_RANGE)
+    wide_aperture = rng.uniform(*WIDE_APERTURE_RANGE)
+    ultrawide_aperture = rng.uniform(*ULTRAWIDE_APERTURE_RANGE)
+    if use_wide:
+        max_focal = max(max_focal, focal_length)
+        wide_aperture = min(wide_aperture, f_number)
+    else:
+        min_focal = min(min_focal, focal_length)
+        ultrawide_aperture = min(ultrawide_aperture, f_number)
+    exposure_mode = rng.choice(EXPOSURE_MODE_VALUES)
+    exposure_program = 1 if exposure_mode == 1 else rng.choice(EXPOSURE_PROGRAM_VALUES[1:])
+    now = datetime.now().astimezone()
+    capture_datetime = now - timedelta(days=rng.uniform(*CAPTURE_AGE_DAYS_RANGE))
+    capture_date = capture_datetime.strftime("%Y:%m:%d %H:%M:%S")
+    subsecond = capture_datetime.strftime("%f")[:3]
+    utc_offset = capture_datetime.strftime("%z")
+    utc_offset = f"{utc_offset[:3]}:{utc_offset[3:]}"
+    lens_model = f"iPhone 15 back dual wide camera {focal_length:.2f}mm f/{f_number:.1f}"
+    capture_overrides = {
+        33434: _rational(exposure_time),
+        33437: _rational(f_number),
+        34850: exposure_program,
+        34855: iso,
+        36867: capture_date,
+        36868: capture_date,
+        36880: utc_offset,
+        36881: utc_offset,
+        36882: utc_offset,
+        37377: _rational(shutter_speed),
+        37379: _rational(brightness),
+        37383: rng.choice(METERING_MODE_VALUES),
+        37385: rng.choice(FLASH_VALUES),
+        37386: _rational(focal_length),
+        37521: subsecond,
+        37522: subsecond,
+        41986: exposure_mode,
+        41987: rng.choice(WHITE_BALANCE_VALUES),
+        41989: focal_35mm,
+        42034: (
+            _rational(min_focal),
+            _rational(max_focal),
+            _rational(wide_aperture),
+            _rational(ultrawide_aperture),
+        ),
+        42036: lens_model,
+        42080: 1,
+    }
+    return capture_overrides, {306: capture_date}
 
 
 def apply_standard_metadata(
     input_path: str | Path,
     reference_path: str | Path,
     output_path: str | Path,
+    rng: random.Random | None = None,
 ) -> Path:
-    """Write a new JPEG with technical metadata and four reference identity tags.
-
-    ICC, resolution, Make, Model, Software and HostComputer are copied. Lens,
-    date, GPS, maker-note and capture settings are deliberately omitted.
-    """
-    source = Path(input_path).resolve()
-    reference = Path(reference_path).resolve()
-    output = Path(output_path).resolve()
-    if source == output:
-        raise ValueError("output must differ from input")
-    if not source.is_file() or not reference.is_file():
-        raise FileNotFoundError("input and reference images must exist")
-
-    source_segments, source_scan = _segments(source.read_bytes())
-    reference_segments, _ = _segments(reference.read_bytes())
-    reference_icc = [segment for segment in reference_segments if _is_icc(segment)]
-    reference_jfif = next(
-        (segment for segment in reference_segments if segment.startswith(b"\xff\xe0") and segment[4:9] == b"JFIF\x00"),
-        None,
+    """Apply the reference ICC profile and compatible capture metadata to a new copy."""
+    input_resolved = Path(input_path).resolve()
+    generator = rng if rng is not None else random.SystemRandom()
+    capture_overrides, image_overrides = _random_capture_overrides(input_resolved, generator)
+    return restore_technical_metadata(
+        input_resolved,
+        reference_path,
+        output_path,
+        capture_metadata_path=reference_path,
+        software_tag="17.6.1",
+        capture_overrides=capture_overrides,
+        image_overrides=image_overrides,
     )
-    identity_exif = _reference_identity_exif(reference)
-    kept = [
-        segment for segment in source_segments
-        if not segment.startswith(b"\xff\xe1")  # EXIF/XMP capture provenance
-        and not _is_icc(segment)
-        and not (reference_jfif is not None and segment.startswith(b"\xff\xe0") and segment[4:9] == b"JFIF\x00")
-    ]
-    technical = (
-        ([reference_jfif] if reference_jfif else [])
-        + ([identity_exif] if identity_exif else [])
-        + reference_icc
-    )
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_bytes(b"\xff\xd8" + b"".join(technical + kept) + source_scan)
-    with Image.open(output) as verified:
-        verified.verify()
-    return output
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Apply reference ICC/resolution and four explicit device identity tags."
+        description=(
+            "Apply the reference Display P3/JFIF/EXIF profile and compatible camera, lens, "
+            "and capture settings to an image copy."
+        )
     )
-    parser.add_argument("--input", required=True)
-    parser.add_argument("--reference", required=True)
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--input", required=True, help="Image to process; it is never overwritten.")
+    parser.add_argument(
+        "--reference",
+        required=True,
+        help="Image providing the target ICC profile and compatible capture metadata.",
+    )
+    parser.add_argument("--output", required=True, help="New JPEG output path.")
     args = parser.parse_args(argv)
     input_path = Path(args.input).resolve()
     output_path = Path(args.output).resolve()
@@ -110,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--output must differ from --input")
     result = apply_standard_metadata(input_path, args.reference, output_path)
     print(f"image={result}")
-    print("metadata=icc_resolution_and_reference_identity; capture_settings=omitted")
+    print("metadata=single-frame JPEG, measured brightness, randomized coherent capture settings")
     return 0
 
 

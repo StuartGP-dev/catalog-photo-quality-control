@@ -25,9 +25,10 @@ portable one-file HTML report plus local assets without modifying source images.
 
 Title, description, price, and currency remain reserved and unset. Optional
 metadata post-processing uses `apply_metadata.py` only on generated selected
-copies, transfers ICC/JFIF plus the explicit Make, Model, Software and
-HostComputer identity tags, and records factual per-image values via
-`image_metadata.py`. Date, GPS, lens and exposure fields remain omitted.
+copies. The restored metadata workflow transfers ICC/JFIF and device identity,
+then generates coherent per-image dates, lens, ISO, exposure, aperture and
+brightness fields. GPS, MakerNote and reference-specific capture blocks remain
+omitted. `image_metadata.py` records every resulting field per image.
 
 The production envelope permits at most four active parameters and normalized
 recipe intensity 1.2. Every rendered image must keep SSIM at least 0.90, pixel

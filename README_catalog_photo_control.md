@@ -172,9 +172,11 @@ python -m common.catalog_photo_control.apply_metadata `
   --output "C:\chemin\image-sortie.jpg"
 ```
 
-ICC, résolution JFIF, Make, Model, Software et HostComputer sont repris. Date,
-GPS, objectif, ISO, exposition, MakerNote et autres réglages de capture restent
-omis. Pour indexer les métadonnées factuelles de chaque image d'un variant :
+ICC, résolution JFIF, Make, Model, Software et HostComputer sont repris. Le
+script historique restauré produit aussi, pour chaque image, un ensemble
+cohérent de date, objectif, ISO, exposition, ouverture et luminosité. GPS,
+MakerNote et champs propres au fichier de référence restent omis. Pour indexer
+les métadonnées de chaque image d'un variant :
 
 ```powershell
 python -m common.catalog_photo_control.image_metadata `
