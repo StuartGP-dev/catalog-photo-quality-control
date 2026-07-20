@@ -11,21 +11,28 @@ def apply_standard_metadata(
     reference_path: str | Path,
     output_path: str | Path,
 ) -> Path:
-    """Apply the validated technical metadata profile to a new image copy."""
+    """Apply the reference ICC profile and compatible capture metadata to a new copy."""
     return restore_technical_metadata(
         input_path,
         reference_path,
         output_path,
-        strip_capture_metadata=True,
+        capture_metadata_path=reference_path,
     )
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Apply the validated Display P3/JFIF/EXIF metadata profile to an image copy."
+        description=(
+            "Apply the reference Display P3/JFIF/EXIF profile and compatible camera, lens, "
+            "and capture settings to an image copy."
+        )
     )
     parser.add_argument("--input", required=True, help="Image to process; it is never overwritten.")
-    parser.add_argument("--reference", required=True, help="Image providing the target ICC profile.")
+    parser.add_argument(
+        "--reference",
+        required=True,
+        help="Image providing the target ICC profile and compatible capture metadata.",
+    )
     parser.add_argument("--output", required=True, help="New JPEG output path.")
     args = parser.parse_args(argv)
     input_path = Path(args.input).resolve()

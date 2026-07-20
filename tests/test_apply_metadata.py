@@ -16,7 +16,25 @@ def test_apply_standard_metadata_to_arbitrary_image(tmp_path: Path) -> None:
     exif[34853] = {1: "N"}
     Image.new("RGB", (64, 48), "red").save(source, exif=exif)
     profile = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
-    Image.new("RGB", (20, 20), "blue").save(reference, icc_profile=profile)
+    reference_exif = Image.Exif()
+    reference_exif[271] = "Apple"
+    reference_exif[272] = "iPhone 15"
+    reference_exif[316] = "iPhone 15"
+    reference_exif[34853] = {1: "N", 2: (47.0, 12.0, 36.72)}
+    reference_exif[34665] = {
+        33434: (1, 39),
+        33437: (8, 5),
+        34855: 640,
+        36867: "2026:07:18 15:54:34",
+        37386: (596, 100),
+        40962: 5712,
+        40963: 4284,
+        42035: "Apple",
+        42036: "iPhone 15 back dual wide camera 5.96mm f/1.6",
+        37500: b"reference-specific-maker-note",
+        37396: (2846, 2130, 3129, 1880),
+    }
+    Image.new("RGB", (20, 20), "blue").save(reference, icc_profile=profile, exif=reference_exif)
     original = source.read_bytes()
 
     apply_standard_metadata(source, reference, output)
@@ -30,9 +48,22 @@ def test_apply_standard_metadata_to_arbitrary_image(tmp_path: Path) -> None:
     assert metadata["exif"]["XResolution"] == "72.0"
     assert metadata["exif"]["YCbCrPositioning"] == 1
     assert metadata["exif_ifds"]["IFD1"]["JpegIFByteCount"] > 0
-    assert "Make" not in metadata["exif"]
-    assert "Model" not in metadata["exif"]
+    assert metadata["exif"]["Make"] == "Apple"
+    assert metadata["exif"]["Model"] == "iPhone 15"
+    assert metadata["exif"]["HostComputer"] == "iPhone 15"
     assert "GPSInfo" not in metadata["exif"]
+    capture = metadata["exif_ifds"]["Exif"]
+    assert capture["LensMake"] == "Apple"
+    assert capture["LensModel"] == "iPhone 15 back dual wide camera 5.96mm f/1.6"
+    assert capture["FocalLength"] == "5.96"
+    assert capture["FNumber"] == "1.6"
+    assert capture["ISOSpeedRatings"] == 640
+    assert capture["ExposureTime"] == str(1 / 39)
+    assert capture["DateTimeOriginal"] == "2026:07:18 15:54:34"
+    assert capture["ExifImageWidth"] == 64
+    assert capture["ExifImageHeight"] == 48
+    assert "MakerNote" not in capture
+    assert "SubjectLocation" not in capture
 
 
 def test_apply_metadata_cli_refuses_in_place_output(tmp_path: Path) -> None:
