@@ -69,3 +69,21 @@ def test_restoration_report_has_original_before_after_and_reference_columns(tmp_
     assert "Variante filtrée — avant" in content
     assert "Variante filtrée — après" in content
     assert "IMG_3206.jpg — référence iPhone 15" in content
+
+
+def test_two_image_report_contains_only_filtered_and_reference_columns(tmp_path: Path) -> None:
+    before, after, reference = [tmp_path / name for name in ("before.jpg", "after.jpg", "reference.jpg")]
+    for path in (before, after, reference):
+        Image.new("RGB", (30, 20), "white").save(path)
+
+    report = generate_restoration_report(
+        before, after, reference, tmp_path / "report", two_image_comparison=True
+    )
+    content = report.read_text(encoding="utf-8")
+
+    assert "Photo filtrée O18" in content
+    assert "IMG_3206.jpg" in content
+    assert "Originale O18" not in content
+    assert "Variante filtrée — avant" not in content
+    assert 'src="assets/after.jpg"' in content
+    assert 'src="assets/reference.jpg"' in content
