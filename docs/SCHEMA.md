@@ -30,20 +30,22 @@ variants.
 
 - `listings`, `listing_images`: active and historical ordered sources;
 - `listing_variants`: recipe, selection rank, aggregate metrics, original and
-  minimum-selected distances with separately inspectable components, and
+  minimum-selected distances plus average distance/rank among ready variants
+  of the same listing, with separately inspectable components, and
   reserved content fields;
 - `listing_variant_images`: every output in source order with source/output
-  hashes, pixel dimensions, canvas/background diagnostics, and per-image metrics.
+  hashes, pixel dimensions, canvas/background diagnostics, per-image metrics,
+  and per-image `metadata_json`/`metadata_status` fields.
 
 For a listing source version, selected variants cannot reuse the same ordered
 pixel-dimension signature. Dimensions include a small deterministic recipe and
 source-index signature, so outputs never equal their originals in both axes.
 
 Content fields are `title_text`, `description_text`, `price_cents`, and
-`currency`. When a read-only source `config.json` provides them, selection
-copies them into every complete variant and writes a `listing.json` beside its
-images. `metadata_json` and `metadata_status` remain reserved for the later
-metadata-writing phase.
+`currency`; this refactor reserves them without populating them. Variant-level
+and image-level metadata fields remain `reserved` unless
+technical metadata is explicitly applied or indexed. Stored JSON describes only
+values actually present in the generated file; it never derives capture data.
 
 Variants are inserted as `draft`. SQLite triggers only allow transition to
 `ready` when the number, indices, and hashes of variant images exactly cover the

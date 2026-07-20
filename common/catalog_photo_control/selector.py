@@ -12,7 +12,6 @@ from typing import Any, Mapping, Sequence
 
 from .diversity import Distance, listing_distance
 from .models import ListingVariant, Recipe, SourceListing, canonical_json
-from .listing_content import load_listing_content, write_variant_content
 from .recipe_learning import refresh_recipe_statistics
 from .recipe_schema import classify_recipe_family
 from .variants_db import VariantsDatabase
@@ -216,7 +215,6 @@ def select_and_persist(
     diversity_config: Mapping[str, Any] | None = None,
     metadata_reference: str | Path | None = None,
 ) -> list[int]:
-    listing_content = load_listing_content(listing.directory)
     existing_rows = variants.connection.execute(
         """SELECT recipe_hash, bench_test_id, aggregate_metrics_json FROM listing_variants
            WHERE listing_id=? AND source_set_hash=? AND status='ready'
@@ -392,10 +390,6 @@ def select_and_persist(
                 minimum_catalog_distance=None,
                 diversity_gate_version=str(diversity_config.get("engine_version", "unknown")) if final_diversity else str(selection.candidate.aggregate_metrics.get("diversity_gate_version", "legacy")),
                 diversity_valid=final_diversity.valid if final_diversity else bool(selection.candidate.aggregate_metrics.get("diversity_valid", True)),
-                title_text=listing_content.title,
-                description_text=listing_content.description,
-                price_cents=listing_content.price_cents,
-                currency=listing_content.currency,
                 metadata_json=(
                     canonical_json({"policy": "technical_only", "image_count": len(final_paths)})
                     if metadata_reference is not None else None
@@ -425,7 +419,6 @@ def select_and_persist(
                     selection.candidate.images, final_paths, strict=True
                 ))
             ]
-            write_variant_content(destination, listing_content, final_paths)
             variant_id = variants.save_complete_variant(variant, image_rows)
             variant_committed = True
             with bench_connection:

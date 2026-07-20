@@ -31,6 +31,13 @@ python -m common.catalog_photo_control.bench `
   --patience 3000
 ```
 
+Pour appliquer aux seules copies sélectionnées le profil ICC et la résolution
+d'une référence, sans copier ni fabriquer de données de capture, ajouter :
+
+```powershell
+  --metadata-reference "C:\Users\yanis\Downloads\IMG_3206.jpg"
+```
+
 Avec une racine externe et un code relatif :
 
 ```powershell
@@ -105,12 +112,12 @@ fixe.
 ## Enveloppe de fidélité
 
 L'espace livré limite chaque recette à quatre paramètres non neutres et à une
-intensité maximale de `1.35`. L'intensité est la somme déterministe, pour chaque
+intensité maximale de `1.2`. L'intensité est la somme déterministe, pour chaque
 paramètre actif hors encodage, de `abs(value-default) / max(abs(min-default),
 abs(max-default))`. `jpeg_quality` et les valeurs neutres ne sont pas comptés.
 
-Chaque image doit respecter : SSIM ≥ `0.97`, pixel MAE ≤ `0.055`, luminance MAE
-≤ `0.045`, ratio de netteté entre `0.55` et `1.8`, fraction écrêtée ≤ `0.035`.
+Chaque image doit respecter : SSIM ≥ `0.90`, pixel MAE ≤ `0.06`, luminance MAE
+≤ `0.06`, ratio de netteté entre `0.70` et `1.60`, fraction écrêtée ≤ `0.08`.
 Une seule image hors enveloppe rejette le variant complet. Le hash de cache
 inclut l'intégralité de `filter_space.json` et la version des métriques.
 
@@ -146,8 +153,26 @@ qu'après le commit ; un échec DB conserve donc tous les fichiers.
 
 ## Confidentialité des métadonnées
 
-Le refactor ne contient pas de pipeline de métadonnées. L’utilitaire autonome
-conservé crée des copies sans métadonnées de deux images sans modifier les
+Le benchmark peut appliquer des métadonnées techniques aux copies sélectionnées.
+La commande autonome équivalente n'écrase jamais son entrée :
+
+```powershell
+python -m common.catalog_photo_control.apply_metadata `
+  --input "C:\chemin\image-entree.jpg" `
+  --reference "C:\Users\yanis\Downloads\IMG_3206.jpg" `
+  --output "C:\chemin\image-sortie.jpg"
+```
+
+Seuls ICC et résolution JFIF sont repris. Les données EXIF/XMP de capture sont
+omises. Pour indexer les métadonnées factuelles de chaque image d'un variant :
+
+```powershell
+python -m common.catalog_photo_control.image_metadata `
+  --database local\databases\catalog_variants.sqlite3 `
+  --variant-id 42
+```
+
+L'utilitaire de confidentialité racine reste disponible et ne modifie pas les
 sources :
 
 ```powershell

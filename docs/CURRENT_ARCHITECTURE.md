@@ -3,7 +3,9 @@
 The supported pipeline is `python -m common.catalog_photo_control.bench`.
 It loads an ordered listing, generates one canonical recipe per complete
 variant, renders atomically, checks fidelity, applies the per-index perceptual
-barrier, then performs max-min selection among valid candidates only.
+barrier, then performs max-min selection among valid candidates only. The final
+database also stores and ranks each ready variant's average distance to all
+ready variants of the same listing.
 
 `image_similarity.py` is the sole source of perceptual identity decisions. It
 computes SHA-256 and EXIF-normalized pHash/dHash/wHash 64-bit values, raw Hamming
@@ -21,10 +23,10 @@ rechecks the barrier immediately before its atomic final insert. `html_report.py
 is the single benchmark report writer. `perceptual_calibration.py` creates a
 portable one-file HTML report plus local assets without modifying source images.
 
-`listing_content.py` reads title, description and price from the listing's
-read-only `config.json`, persists them in final variants and writes a portable
-`listing.json` beside each complete image set. `metadata_diagnostic.py` is a
-read-only two-image inspector producing JSON and HTML; it never edits metadata.
+Title, description, price, and currency remain reserved and unset. Optional
+metadata post-processing uses `apply_metadata.py` only on generated selected
+copies, transfers ICC/JFIF resolution without capture provenance, and records
+factual per-image values via `image_metadata.py`.
 
 The production envelope permits at most four active parameters and normalized
 recipe intensity 1.2. Every rendered image must keep SSIM at least 0.90, pixel
