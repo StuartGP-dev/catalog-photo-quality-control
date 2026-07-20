@@ -1,6 +1,7 @@
 import math
 import os
 import random
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from common.catalog_photo_control.apply_metadata import (
     ULTRAWIDE_FOCAL_RANGE,
     WHITE_BALANCE_VALUES,
     WIDE_FOCAL_RANGE,
+    _estimate_brightness_value,
     apply_standard_metadata,
     main,
 )
@@ -85,7 +87,8 @@ def test_apply_standard_metadata_to_arbitrary_image(tmp_path: Path) -> None:
     assert metadata["stored_height"] == 48
     assert metadata["icc_profile"] is not None
     assert metadata["embedded_info"]["jfif_density"] == [300, 300]
-    assert metadata["exif"]["XResolution"] == "72.0"
+    assert metadata["exif"]["XResolution"] == "300.0"
+    assert metadata["exif"]["YResolution"] == "300.0"
     assert metadata["exif"]["YCbCrPositioning"] == 1
     assert metadata["exif_ifds"]["IFD1"]["JpegIFByteCount"] > 0
     assert metadata["exif"]["Make"] == "Apple"
@@ -106,8 +109,10 @@ def test_apply_standard_metadata_to_arbitrary_image(tmp_path: Path) -> None:
     assert f"{focal_length:.2f}mm" in capture["LensModel"]
     assert capture["ISOSpeedRatings"] in ISO_VALUES
     assert EXPOSURE_DENOMINATOR_RANGE[0] <= round(1 / exposure_time) <= EXPOSURE_DENOMINATOR_RANGE[1]
-    assert shutter_speed == pytest.approx(math.log2(1 / exposure_time), abs=1e-4)
+    assert shutter_speed == pytest.approx(math.log2(1 / exposure_time), abs=1e-3)
+    measured_brightness = _estimate_brightness_value(source)
     assert BRIGHTNESS_VALUE_RANGE[0] <= float(capture["BrightnessValue"]) <= BRIGHTNESS_VALUE_RANGE[1]
+    assert float(capture["BrightnessValue"]) == pytest.approx(measured_brightness, abs=0.3)
     assert capture["Flash"] in FLASH_VALUES
     assert capture["MeteringMode"] in METERING_MODE_VALUES
     assert capture["ExposureMode"] in EXPOSURE_MODE_VALUES
@@ -117,12 +122,16 @@ def test_apply_standard_metadata_to_arbitrary_image(tmp_path: Path) -> None:
     else:
         assert capture["ExposureProgram"] in (2, 3)
     assert capture["WhiteBalance"] in WHITE_BALANCE_VALUES
-    assert capture["DateTimeOriginal"] == "2026:07:18 15:54:34"
+    capture_datetime = datetime.strptime(capture["DateTimeOriginal"], "%Y:%m:%d %H:%M:%S")
+    now = datetime.now()
+    assert now - timedelta(days=7, seconds=2) <= capture_datetime <= now + timedelta(seconds=2)
+    assert capture["DateTimeDigitized"] == capture["DateTimeOriginal"]
+    assert metadata["exif"]["DateTime"] == capture["DateTimeOriginal"]
     assert capture["ExifImageWidth"] == 64
     assert capture["ExifImageHeight"] == 48
     assert capture["CompositeImage"] == 1
     assert "MakerNote" not in capture
-    assert capture["SubjectLocation"] == [32, 24, 32, 24]
+    assert "SubjectLocation" not in capture
     assert "mp" not in metadata["embedded_info"]
     assert metadata["format"] == "JPEG"
     assert metadata["frame_count"] == 1

@@ -17,6 +17,7 @@ from .metadata_diagnostic import _comparison_matrix, _flatten_metadata, inspect_
 
 SOFTWARE_TAG = "Catalog Photo Control; pixels transformed from a filtered catalogue image"
 COMPOSITE_IMAGE_TAG = 42080
+OUTPUT_DPI = 300
 
 # piexif predates this EXIF 2.32 tag, but can preserve it once its type is known.
 piexif.TAGS["Exif"].setdefault(COMPOSITE_IMAGE_TAG, {"name": "CompositeImage", "type": 3})
@@ -97,6 +98,7 @@ def restore_technical_metadata(
     copy_reference_specific_metadata: bool = False,
     software_tag: str = SOFTWARE_TAG,
     capture_overrides: Mapping[int, object] | None = None,
+    image_overrides: Mapping[int, object] | None = None,
 ) -> Path:
     """Create a new image with technical metadata selected from the reference."""
     source = Path(source_path).resolve()
@@ -131,12 +133,14 @@ def restore_technical_metadata(
         if 34853 in exif:
             del exif[34853]
         exif[274] = 1  # Orientation: pixels are already normalized.
-        exif[282] = 72
-        exif[283] = 72
+        exif[282] = OUTPUT_DPI
+        exif[283] = OUTPUT_DPI
         exif[296] = 2  # inches
         exif[305] = software_tag
         exif[531] = 1  # centered YCbCr, like the reference iPhone file
         exif[306] = datetime.now().astimezone().strftime("%Y:%m:%d %H:%M:%S")
+        if image_overrides:
+            exif.update(image_overrides)
         if capture_source:
             exif_ifd = exif.get_ifd(34665)
             # These values describe the rendered JPEG, not the capture source.
@@ -181,8 +185,8 @@ def restore_technical_metadata(
         exif_dict["thumbnail"] = thumbnail_buffer.getvalue()
         exif_dict["1st"].update({
             piexif.ImageIFD.Compression: 6,
-            piexif.ImageIFD.XResolution: (72, 1),
-            piexif.ImageIFD.YResolution: (72, 1),
+            piexif.ImageIFD.XResolution: (OUTPUT_DPI, 1),
+            piexif.ImageIFD.YResolution: (OUTPUT_DPI, 1),
             piexif.ImageIFD.ResolutionUnit: 2,
         })
         piexif.insert(piexif.dump(exif_dict), str(output))
