@@ -41,7 +41,7 @@ def test_applies_only_technical_metadata_without_changing_pixels(tmp_path: Path)
     stored = read_image_metadata(output)
     assert stored["icc_profile_present"] is True
     assert stored["width"] == 64 and stored["height"] == 48
-    assert stored["technical_exif"] == {}
+    assert all(not fields for fields in stored["exif"].values())
 
 
 def test_cli_refuses_in_place_output(tmp_path: Path) -> None:

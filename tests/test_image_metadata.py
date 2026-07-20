@@ -30,6 +30,9 @@ def test_writes_factual_metadata_for_each_variant_image(synthetic_listing: Path,
         rows = database.connection.execute("SELECT metadata_json, metadata_status FROM listing_variant_images ORDER BY image_index").fetchall()
         assert all(row["metadata_status"] == "stored" for row in rows)
         assert all(json.loads(row["metadata_json"])["width"] == 32 for row in rows)
+        payload = json.loads(rows[0]["metadata_json"])
+        assert {"file", "embedded_info", "icc_profile", "exif", "jpeg"} <= payload.keys()
+        assert {"IFD0", "Exif", "GPSInfo", "Interop", "IFD1"} <= payload["exif"].keys()
         assert database.connection.execute("SELECT metadata_status FROM listing_variants").fetchone()[0] == "stored"
 
 

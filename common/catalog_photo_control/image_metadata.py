@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -9,37 +10,97 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
-from PIL import ExifTags, Image
+from PIL import ExifTags, Image, ImageCms
 
 from .models import canonical_json
 from .apply_metadata import apply_standard_metadata
 
 
-CAPTURE_TAGS = {
-    "Make", "Model", "DateTime", "DateTimeOriginal", "DateTimeDigitized",
-    "GPSInfo", "MakerNote", "LensMake", "LensModel", "BodySerialNumber",
-}
+def _safe_metadata_value(value: object) -> object:
+    if isinstance(value, bytes):
+        return {"byte_length": len(value), "sha256": hashlib.sha256(value).hexdigest()}
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (tuple, list)):
+        return [_safe_metadata_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _safe_metadata_value(item) for key, item in value.items()}
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _named_tags(values: object, *, gps: bool = False) -> dict[str, object]:
+    if not hasattr(values, "items"):
+        return {}
+    names = ExifTags.GPSTAGS if gps else ExifTags.TAGS
+    return {
+        names.get(tag, str(tag)): _safe_metadata_value(value)
+        for tag, value in values.items()
+    }
 
 
 def read_image_metadata(path: str | Path) -> dict[str, object]:
-    """Return factual metadata present in the file, without deriving capture data."""
+    """Return every factual metadata field Pillow can expose without deriving values."""
     resolved = Path(path).resolve()
     with Image.open(resolved) as image:
-        exif_names = {
-            ExifTags.TAGS.get(tag, str(tag)): value
-            for tag, value in image.getexif().items()
-            if ExifTags.TAGS.get(tag, str(tag)) not in CAPTURE_TAGS
-            and isinstance(value, (str, int, float))
-        }
+        raw_exif = image.getexif()
+        exif_ifds: dict[str, object] = {}
+        for ifd_name in ("Exif", "GPSInfo", "Interop", "IFD1"):
+            ifd_id = getattr(ExifTags.IFD, ifd_name, None)
+            if ifd_id is None:
+                exif_ifds[ifd_name] = {}
+                continue
+            try:
+                values = raw_exif.get_ifd(ifd_id)
+            except (KeyError, OSError, TypeError, ValueError):
+                values = {}
+            exif_ifds[ifd_name] = _named_tags(values, gps=ifd_name == "GPSInfo")
         dpi = image.info.get("dpi")
+        embedded_info = {
+            str(key): _safe_metadata_value(value)
+            for key, value in image.info.items()
+        }
+        icc_profile = image.info.get("icc_profile")
+        icc_details: dict[str, object] | None = None
+        if isinstance(icc_profile, bytes):
+            icc_details = _safe_metadata_value(icc_profile)
+            assert isinstance(icc_details, dict)
+            try:
+                profile = ImageCms.ImageCmsProfile(io.BytesIO(icc_profile))
+                icc_details.update({
+                    "name": ImageCms.getProfileName(profile).strip(),
+                    "description": ImageCms.getProfileDescription(profile).strip(),
+                    "info": ImageCms.getProfileInfo(profile).strip(),
+                })
+            except (OSError, TypeError, ValueError):
+                icc_details["parse_status"] = "unavailable"
         return {
+            "file": {
+                "byte_length": resolved.stat().st_size,
+                "sha256": hashlib.sha256(resolved.read_bytes()).hexdigest(),
+            },
             "format": image.format,
+            "format_description": getattr(image, "format_description", None),
             "width": image.width,
             "height": image.height,
             "mode": image.mode,
-            "icc_profile_present": bool(image.info.get("icc_profile")),
+            "bands": list(image.getbands()),
+            "frame_count": int(getattr(image, "n_frames", 1)),
+            "animated": bool(getattr(image, "is_animated", False)),
+            "icc_profile_present": icc_profile is not None,
             "dpi": [round(float(value), 4) for value in dpi] if dpi else None,
-            "technical_exif": exif_names,
+            "embedded_info": embedded_info,
+            "icc_profile": icc_details,
+            "exif": {
+                "IFD0": _named_tags(raw_exif),
+                **exif_ifds,
+            },
+            "jpeg": {
+                "layers": _safe_metadata_value(getattr(image, "layer", [])),
+                "quantization_tables": _safe_metadata_value(getattr(image, "quantization", {})),
+            } if image.format == "JPEG" else None,
         }
 
 
