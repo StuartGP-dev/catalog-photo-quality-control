@@ -10,11 +10,25 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from PIL import Image, ImageCms, ImageOps
+import piexif
 
 from .metadata_diagnostic import _comparison_matrix, _flatten_metadata, inspect_image_metadata
 
 
 SOFTWARE_TAG = "Catalog Photo Control; pixels transformed from a filtered catalogue image"
+
+
+def _ensure_jfif_300_dpi(path: Path) -> None:
+    data = path.read_bytes()
+    jfif = b"\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x01\x2c\x01\x2c\x00\x00"
+    if not data.startswith(b"\xff\xd8"):
+        raise ValueError(f"not a JPEG file: {path}")
+    if data[2:4] == b"\xff\xe0" and data[6:11] == b"JFIF\x00":
+        segment_length = int.from_bytes(data[4:6], "big")
+        data = data[:2] + jfif + data[4 + segment_length:]
+    else:
+        data = data[:2] + jfif + data[2:]
+    path.write_bytes(data)
 
 
 def restore_technical_metadata(
@@ -81,6 +95,26 @@ def restore_technical_metadata(
             exif=exif,
             icc_profile=target_profile,
         )
+        thumbnail = image.copy()
+        thumbnail.thumbnail((160, 160), Image.Resampling.LANCZOS)
+        thumbnail_buffer = BytesIO()
+        thumbnail.save(thumbnail_buffer, format="JPEG", quality=85)
+        exif_dict = piexif.load(str(output))
+        for tag in (36864, 37121, 37500, 40960, 41728, 41729):
+            value = exif_dict["Exif"].get(tag)
+            if isinstance(value, tuple) and all(isinstance(item, int) for item in value):
+                exif_dict["Exif"][tag] = bytes(value)
+            elif tag in (41728, 41729) and isinstance(value, int):
+                exif_dict["Exif"][tag] = bytes([value])
+        exif_dict["thumbnail"] = thumbnail_buffer.getvalue()
+        exif_dict["1st"].update({
+            piexif.ImageIFD.Compression: 6,
+            piexif.ImageIFD.XResolution: (72, 1),
+            piexif.ImageIFD.YResolution: (72, 1),
+            piexif.ImageIFD.ResolutionUnit: 2,
+        })
+        piexif.insert(piexif.dump(exif_dict), str(output))
+        _ensure_jfif_300_dpi(output)
     return output
 
 
@@ -158,6 +192,13 @@ body{{font:14px system-ui;background:#f3f4f6;margin:1.5rem;color:#111827}}main{{
 <h1>Variante filtrée — métadonnées avant/après</h1>
 <section><p>{"La copie « après » utilise le profil Display P3 et restaure les métadonnées de capture compatibles de la référence iPhone 15 (appareil, objectif et réglages de prise de vue). Le GPS, les coordonnées de sujet et les notes constructeur liées au fichier de référence sont exclus." if capture_metadata_restored else "La copie « après » utilise le profil Display P3 et la résolution technique de la référence iPhone. Les pixels ont été convertis correctement vers ce profil. Les champs de provenance de prise de vue — appareil, objectif, date et GPS — ne sont pas falsifiés."}</p></section>
 <section class="images">{image_panel}</section>
+<section><h2>Complétude des métadonnées</h2><table><thead><tr><th>Groupe</th><th>État</th><th>Explication</th></tr></thead><tbody>
+<tr><th>Miniature EXIF IFD1</th><td>générée</td><td>Miniature JPEG réelle, avec compression et résolution cohérentes.</td></tr>
+<tr><th>GPS</th><td>exclu</td><td>Suppression volontaire demandée.</td></tr>
+<tr><th>Apple MakerNote / SubjectLocation</th><td>exclus</td><td>Données privées dépendantes du capteur et des dimensions de la prise de vue.</td></tr>
+<tr><th>MP/MPO</th><td>non applicable</td><td>La variante est un JPEG simple et ne contient pas une seconde prise de vue.</td></tr>
+<tr><th>Zone.Identifier</th><td>non applicable</td><td>Flux Windows externe au fichier image, créé éventuellement lors d'un téléchargement.</td></tr>
+</tbody></table></section>
 <section><h2>Tableau comparatif complet des métadonnées</h2><p>Il reprend la matrice du rapport précédent et ajoute la variante après traitement. « — » signifie que la propriété est absente.</p><table>{_comparison_matrix(matrix_images)}</table></section>
 {'' if two_image_comparison else f'<section><h2>Tableau des modifications</h2><table><thead><tr><th>Propriété</th><th>Avant</th><th>Après</th><th>Modification</th></tr></thead><tbody>{_change_table(before, after)}</tbody></table></section>'}
 </main></body></html>''', encoding="utf-8"

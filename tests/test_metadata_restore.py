@@ -27,9 +27,11 @@ def test_restore_technical_metadata_is_non_destructive_and_truthful(tmp_path: Pa
     assert metadata["exif"]["Orientation"] == 1
     assert metadata["exif"]["Software"].startswith("Catalog Photo Control")
     assert metadata["exif"]["YCbCrPositioning"] == 1
-    assert metadata["embedded_info"]["dpi"] == [300, 300]
+    assert metadata["embedded_info"]["jfif_density"] == [300, 300]
     assert "Make" not in metadata["exif"]
     assert "GPSInfo" not in metadata["exif"]
+    assert metadata["exif_ifds"]["IFD1"]["Compression"] == 6
+    assert metadata["exif_ifds"]["IFD1"]["JpegIFByteCount"] > 0
 
 
 def test_restore_uses_capture_source_and_removes_gps(tmp_path: Path) -> None:
@@ -43,9 +45,12 @@ def test_restore_uses_capture_source_and_removes_gps(tmp_path: Path) -> None:
     exif = Image.Exif()
     exif[271] = "Apple"
     exif[272] = "iPhone 13"
-    exif[36867] = "2024:08:23 14:25:23"
     exif[34853] = {1: "N", 2: (47.0, 0.0, 0.0)}
-    exif[34665] = {37396: (10, 10, 5, 5), 37500: b"camera-private-data"}
+    exif[34665] = {
+        36867: "2024:08:23 14:25:23",
+        37396: (10, 10, 5, 5),
+        37500: b"camera-private-data",
+    }
     Image.new("RGB", (40, 30), "white").save(capture, exif=exif)
 
     restore_technical_metadata(filtered, reference, output, capture)
@@ -53,7 +58,7 @@ def test_restore_uses_capture_source_and_removes_gps(tmp_path: Path) -> None:
 
     assert metadata["exif"]["Make"] == "Apple"
     assert metadata["exif"]["Model"] == "iPhone 13"
-    assert metadata["exif"]["DateTimeOriginal"] == "2024:08:23 14:25:23"
+    assert metadata["exif_ifds"]["Exif"]["DateTimeOriginal"] == "2024:08:23 14:25:23"
     assert "GPSInfo" not in metadata["exif"]
     assert metadata["exif"]["DateTime"].startswith("20")
     assert metadata["exif_ifds"]["Exif"]["ExifImageWidth"] == 40
@@ -92,6 +97,8 @@ def test_two_image_report_contains_only_filtered_and_reference_columns(tmp_path:
     assert "Variante filtrée — avant" not in content
     assert 'src="assets/after.jpg"' in content
     assert 'src="assets/reference.jpg"' in content
+    assert "Complétude des métadonnées" in content
+    assert "Miniature EXIF IFD1" in content
 
 
 def test_report_explains_capture_metadata_restoration(tmp_path: Path) -> None:
