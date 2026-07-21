@@ -1,120 +1,227 @@
-# Catalog photo quality control
+# Catalog Photo Control
 
-Ce paquet utilise un nommage neutre et oriente controle qualite des photos catalogue.
+Pipeline locale et reproductible de génération, benchmark qualité et sélection
+de variants photo complets pour une annonce. Une recette canonique unique est
+appliquée à toutes les images d’un variant ; un échec d’image invalide le variant
+entier.
 
-## Objectif actuel
+## Installation
 
-Construire une pipeline de filtres par annonce :
-
-1. scanner les annonces locales ;
-2. tester beaucoup de recettes de rendu ;
-3. stocker les resultats dans une DB partagee ;
-4. clusteriser les filtres par annonce ;
-5. selectionner progressivement des filtres differents entre eux ;
-6. exporter une annonce complete avec le meme filtre applique a toutes ses images.
-
-Une annonce contient plusieurs images. Une recette de filtre doit donc etre evaluee sur toute l'annonce, avec des stats par image puis une agregation annonce : moyenne, minimum, maximum et stabilite.
-
-## Modules principaux
-
-- `common.catalog_photo_control.client_render_sampler`
-- `common.catalog_photo_control.filter_cluster_builder`
-- `common.catalog_photo_control.diverse_target_selector`
-- `common.catalog_photo_control.catalog_config`
-- `common.catalog_photo_control.catalog_db`
-- `common.catalog_photo_control.init_catalog_db`
-- `common.catalog_photo_control.ingest_annonces`
-
-## Chemins locaux par defaut
-
-Par defaut, le code lit les annonces depuis :
-
-```text
-C:\Users\yanis\Documents\Code\Bot\annonces
-```
-
-Les sorties generees restent dans :
-
-```text
-<repo>\local\debug_catalog_photo_control
-<repo>\local\catalog_filter_engine
-```
-
-Le dossier `local/` est ignore par Git pour eviter de publier les sorties de benchmark, les DB SQLite locales et les images generees.
-
-## Environnement Python
-
-Creation du venv Windows :
+Sous PowerShell :
 
 ```powershell
-cd C:\Users\yanis\Documents\Code\Catalog-Photo-Control
 powershell -ExecutionPolicy Bypass -File .\scripts\setup_venv.ps1
 .\.venv\Scripts\Activate.ps1
+python -m pytest -q
 ```
 
-## DB partagee multi-PC
+Les sources d’annonces restent externes et sont uniquement lues. Toutes les
+sorties sont placées sous `local/`, ignoré par Git.
 
-La DB principale doit etre PostgreSQL, pas SQLite.
+## Benchmark unique
 
-Demarrage local via Docker sur le PC qui heberge la DB :
+Avec un chemin d’annonce direct :
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start_shared_db.ps1 -Password "CHANGE_ME_STRONG"
-$env:CATALOG_DB_DSN = "postgresql://catalog_user:CHANGE_ME_STRONG@localhost:5432/catalog_filter_engine"
-python -m common.catalog_photo_control.init_catalog_db --require-postgres
+python -m common.catalog_photo_control.bench `
+  --listing "C:\catalogue\bijoux\O\O18" `
+  --target-variants 50 `
+  --max-tests 20000 `
+  --max-duration-minutes 180 `
+  --patience 3000
 ```
 
-Depuis un autre PC via Tailscale, remplacer `localhost` par l'IP Tailscale du PC qui heberge Postgres :
+Pour appliquer aux seules copies sélectionnées le profil ICC, la résolution et
+les quatre tags d'identité Make/Model/Software/HostComputer d'une référence :
 
 ```powershell
-$env:CATALOG_DB_DSN = "postgresql://catalog_user:CHANGE_ME_STRONG@100.x.x.x:5432/catalog_filter_engine"
-python -m common.catalog_photo_control.init_catalog_db --require-postgres
+  --metadata-reference "C:\Users\yanis\Downloads\IMG_3206.jpg"
 ```
 
-Fallback local SQLite seulement pour smoke tests isoles :
+Avec une racine externe et un code relatif :
 
 ```powershell
-$env:CATALOG_DB_DSN = "sqlite:///local/catalog_filter_engine/catalog_filters.sqlite3"
+python -m common.catalog_photo_control.bench `
+  --source-root "C:\catalogue" `
+  --listing "bijoux/O/O18" `
+  --target-variants 50
 ```
 
-Les autres variables utiles :
+Chaque invocation crée un run distinct, mais réutilise automatiquement les tests
+déjà présents pour la même empreinte ordonnée des sources. Les variants finaux
+existants comptent dans `--target-variants`. Les limites positives
+`--max-tests`, `--max-duration-minutes` et `--patience` garantissent l’arrêt.
+
+La répartition des propositions vient de `config/filter_space.json` (50 %
+exploration, 30 % recettes éprouvées, 20 % mutations par défaut). Elle peut être
+surchargée avec les trois options `--random-share`, `--proven-share` et
+`--mutation-share`, dont la somme doit être 1.
+
+La sélection attend par défaut un pool de trois candidats éligibles par place
+restante avant d’appliquer le max-min. Ce multiplicateur est configurable via
+`selection_pool_multiplier` dans le même fichier. Si une limite d’arrêt survient
+avant, le pool valide disponible est tout de même sélectionné.
+
+## Calibration visuelle
+
+La commande séparée de calibration explore des paliers géométriques plus larges
+sans alimenter la base finale des variants :
 
 ```powershell
-$env:CATALOG_PHOTO_ANNONCES_ROOT = "C:\Users\yanis\Documents\Code\Bot\annonces"
-$env:CATALOG_PHOTO_OUTPUT_ROOT = "local\catalog_filter_engine"
+python -m common.catalog_photo_control.calibrate `
+  --listing "C:\catalogue\bijoux\O\O18" `
+  --families rotation,crop,zoom,dezoom,offset,geometry-combinations `
+  --output-root "local/calibration_runs" `
+  --coarse-steps 6 `
+  --bisection-steps 4
 ```
 
-## Ingestion annonces
+Elle produit un seul `index.html`, accompagné de données JSON et d’outils
+d’inspection sous `local/calibration_runs`. Les métriques ne sont que des aides
+au choix : la validation visuelle de toutes les images reste obligatoire. Voir
+[`docs/CALIBRATION.md`](docs/CALIBRATION.md).
 
-Dry-run sans ecriture DB :
+## Sorties
+
+```text
+local/
+├── databases/
+│   ├── catalog_bench.sqlite3
+│   └── catalog_variants.sqlite3
+├── bench_work/
+└── bench_runs/<listing>/<run_id>/
+    ├── index.html
+    └── selected_variants/variant_0001/...
+```
+
+Un run produit exactement un fichier HTML : `index.html`. Il affiche le motif
+d’arrêt, les compteurs, toutes les images de chaque variant dans l’ordre source,
+la recette, les métriques et les champs réservés de contenu/métadonnées.
+
+Les deux bases vides peuvent aussi être initialisées sans lancer de benchmark :
 
 ```powershell
-python -m common.catalog_photo_control.ingest_annonces --dry-run --limit 5
+python -m common.catalog_photo_control.bench_db --local-root local
 ```
 
-Ecriture DB partagee :
+Une vue générique de toutes les annonces, variants, images et colonnes de la
+base finale peut être régénérée à tout moment :
 
 ```powershell
-$env:CATALOG_DB_DSN = "postgresql://catalog_user:CHANGE_ME_STRONG@localhost:5432/catalog_filter_engine"
-python -m common.catalog_photo_control.ingest_annonces --limit 5
+python -m common.catalog_photo_control.catalog_report `
+  --database local\databases\catalog_variants.sqlite3 `
+  --output local\catalog\index.html
 ```
 
-Run complet :
+Le détail des tables et invariants se trouve dans
+[`docs/SCHEMA.md`](docs/SCHEMA.md). Le seul espace de filtres est
+[`config/filter_space.json`](config/filter_space.json) ; il n’existe aucun profil
+fixe.
+
+## Enveloppe de fidélité
+
+L'espace livré limite chaque recette à quatre paramètres non neutres et à une
+intensité maximale de `1.2`. L'intensité est la somme déterministe, pour chaque
+paramètre actif hors encodage, de `abs(value-default) / max(abs(min-default),
+abs(max-default))`. `jpeg_quality` et les valeurs neutres ne sont pas comptés.
+
+Chaque image doit respecter : SSIM ≥ `0.90`, pixel MAE ≤ `0.06`, luminance MAE
+≤ `0.06`, ratio de netteté entre `0.70` et `1.60`, fraction écrêtée ≤ `0.08`.
+Une seule image hors enveloppe rejette le variant complet. Le hash de cache
+inclut l'intégralité de `filter_space.json` et la version des métriques.
+
+Les modes de canevas subtils sont `none`, `white`, `light_gray`,
+`sampled_background`, `sampled_edge`, `side_bands` et `uniform_frame`. Une
+signature déterministe de quelques pixels, dérivée du hash de recette et de
+l'index source, garantit que chaque sortie diffère des dimensions originales.
+La base finale refuse également une signature de dimensions déjà sélectionnée
+pour la même annonce et la même version source.
+
+## Purge des résultats générés
 
 ```powershell
-python -m common.catalog_photo_control.ingest_annonces
+# Une annonce, chemin direct
+python -m common.catalog_photo_control.purge --listing "C:\catalogue\bijoux\O\O18"
+
+# Une annonce, racine et clé relative
+python -m common.catalog_photo_control.purge --source-root "C:\catalogue" --listing "bijoux/O/O18"
+
+# Prévisualisation ou version source courante seulement
+python -m common.catalog_photo_control.purge --listing "C:\catalogue\bijoux\O\O18" --dry-run
+python -m common.catalog_photo_control.purge --listing "C:\catalogue\bijoux\O\O18" --current-source-only
+
+# Toutes les données gérées, avec réinitialisation des schémas
+python -m common.catalog_photo_control.purge --all --yes --reinitialize
 ```
 
-## Nettoyage local
+La purge ne touche jamais aux sources ni aux autres fichiers de `local/`. Pour
+une annonce, la base variants est attachée à la connexion benchmark avec SQLite
+`ATTACH DATABASE` et les deux ensembles de lignes sont validés dans une seule
+transaction. Les dossiers collectés avant transaction ne sont supprimés
+qu'après le commit ; un échec DB conserve donc tous les fichiers.
 
-Voir ce qui serait supprime :
+## Confidentialité des métadonnées
+
+Le benchmark peut appliquer des métadonnées techniques aux copies sélectionnées.
+La commande autonome équivalente n'écrase jamais son entrée :
+
+```powershell
+python -m common.catalog_photo_control.apply_metadata `
+  --input "C:\chemin\image-entree.jpg" `
+  --reference "C:\Users\yanis\Downloads\IMG_3206.jpg" `
+  --output "C:\chemin\image-sortie.jpg"
+```
+
+ICC, résolution JFIF, Make, Model, Software et HostComputer sont repris. Le
+script historique restauré produit aussi, pour chaque image, un ensemble
+cohérent de date, objectif, ISO, exposition, ouverture et luminosité. GPS,
+MakerNote, XMP/InstanceID, ImageUniqueID, CameraOwnerName, BodySerialNumber et
+LensSerialNumber sont supprimés explicitement. Pour indexer les métadonnées de
+chaque image d'un variant :
+
+```powershell
+python -m common.catalog_photo_control.image_metadata `
+  --database local\databases\catalog_variants.sqlite3 `
+  --variant-id 42
+```
+
+Sur une base existante, `--metadata-reference` au lancement du benchmark migre
+et traite automatiquement les variants `ready` encore non indexés. Le même
+backfill peut être lancé sans benchmark :
+
+```powershell
+python -m common.catalog_photo_control.image_metadata `
+  --database local\databases\catalog_variants.sqlite3 `
+  --reference "C:\Users\yanis\Downloads\IMG_3206.jpg"
+```
+
+L'utilitaire de confidentialité racine reste disponible et ne modifie pas les
+sources :
+
+```powershell
+python .\metadata_privacy_two_images.py image1.jpg image2.jpg `
+  --output-dir local\metadata_copies
+```
+
+## Nettoyage
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\clean_generated_artifacts.ps1 -WhatIfOnly
+powershell -ExecutionPolicy Bypass -File .\scripts\clean_generated_artifacts.ps1
 ```
+# Barrière de similarité perceptuelle
 
-Supprimer les artifacts locaux ignores par Git :
+Le benchmark contrôle séparément la fidélité à la source et la similarité aux
+variantes finales. Chaque sortie candidate est comparée uniquement aux images
+`ready` du même `image_index`. SHA-256 détecte l'identité stricte ; pHash,
+dHash et wHash 64 bits fournissent un verdict par consensus. Un seul verdict
+`exact`, `same` ou `near_duplicate` rejette atomiquement le variant complet
+avant toute sélection max-min.
+
+Calibration courte en lecture seule des sources :
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\clean_generated_artifacts.ps1 -IncludeArchives
+python -m common.catalog_photo_control.perceptual_calibration `
+  --listing "C:\Users\yanis\Documents\Code\Bot-Vinted\annonces\bijoux\O\O18" `
+  --output "local\perceptual_calibration\O18"
 ```

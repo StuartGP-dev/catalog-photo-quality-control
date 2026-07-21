@@ -1,20 +1,10 @@
-param(
-    [switch]$IncludeArchives,
-    [switch]$WhatIfOnly
-)
+param([switch]$WhatIfOnly)
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $RepoRoot
 
-$Targets = @(
-    "local",
-    "target_filter_archive"
-)
-
-if ($IncludeArchives) {
-    $Targets += Get-ChildItem -Path $RepoRoot -Filter "*.zip" -File | ForEach-Object { $_.FullName }
-}
+$Targets = @("local")
 
 foreach ($Target in $Targets) {
     if (Test-Path $Target) {
