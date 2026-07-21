@@ -56,6 +56,7 @@ def test_apply_standard_metadata_to_arbitrary_image(tmp_path: Path) -> None:
     reference_exif[272] = "iPhone 15"
     reference_exif[316] = "iPhone 15"
     reference_exif[34853] = {1: "N", 2: (47.0, 12.0, 36.72)}
+    reference_exif[700] = b'<x:xmpmeta xmpMM:InstanceID="xmp.iid:forbidden"/>'
     reference_exif[34665] = {
         33434: (1, 39),
         33437: (8, 5),
@@ -67,6 +68,10 @@ def test_apply_standard_metadata_to_arbitrary_image(tmp_path: Path) -> None:
         42035: "Apple",
         42036: "iPhone 15 back dual wide camera 5.96mm f/1.6",
         42080: 2,
+        42016: "forbidden-image-unique-id",
+        42032: "forbidden-owner",
+        42033: "forbidden-body-serial",
+        42037: "forbidden-lens-serial",
         37500: b"reference-specific-maker-note",
         37396: (10, 10, 5, 5),
     }
@@ -96,6 +101,7 @@ def test_apply_standard_metadata_to_arbitrary_image(tmp_path: Path) -> None:
     assert metadata["exif"]["HostComputer"] == "iPhone 15"
     assert metadata["exif"]["Software"] == "17.6.1"
     assert "GPSInfo" not in metadata["exif"]
+    assert "XMLPacket" not in metadata["exif"]
     capture = metadata["exif_ifds"]["Exif"]
     assert capture["LensMake"] == "Apple"
     focal_length = float(capture["FocalLength"])
@@ -131,6 +137,10 @@ def test_apply_standard_metadata_to_arbitrary_image(tmp_path: Path) -> None:
     assert capture["ExifImageHeight"] == 48
     assert capture["CompositeImage"] == 1
     assert "MakerNote" not in capture
+    for name in ("ImageUniqueID", "CameraOwnerName", "BodySerialNumber", "LensSerialNumber"):
+        assert name not in capture
+        assert name not in metadata["exif"]
+    assert b"xmpmeta" not in output.read_bytes().lower()
     assert "SubjectLocation" not in capture
     assert "mp" not in metadata["embedded_info"]
     assert metadata["format"] == "JPEG"

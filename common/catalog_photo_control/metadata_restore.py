@@ -18,6 +18,8 @@ from .metadata_diagnostic import _comparison_matrix, _flatten_metadata, inspect_
 SOFTWARE_TAG = "Catalog Photo Control; pixels transformed from a filtered catalogue image"
 COMPOSITE_IMAGE_TAG = 42080
 OUTPUT_DPI = 300
+FORBIDDEN_IDENTITY_TAGS = (42016, 42032, 42033, 42037)
+XMP_TAG = 700
 
 # piexif predates this EXIF 2.32 tag, but can preserve it once its type is known.
 piexif.TAGS["Exif"].setdefault(COMPOSITE_IMAGE_TAG, {"name": "CompositeImage", "type": 3})
@@ -132,6 +134,9 @@ def restore_technical_metadata(
         # GPS is intentionally omitted even when it exists in the capture source.
         if 34853 in exif:
             del exif[34853]
+        exif.pop(XMP_TAG, None)
+        for tag in FORBIDDEN_IDENTITY_TAGS:
+            exif.pop(tag, None)
         exif[274] = 1  # Orientation: pixels are already normalized.
         exif[282] = OUTPUT_DPI
         exif[283] = OUTPUT_DPI
@@ -143,6 +148,8 @@ def restore_technical_metadata(
             exif.update(image_overrides)
         if capture_source:
             exif_ifd = exif.get_ifd(34665)
+            for tag in FORBIDDEN_IDENTITY_TAGS:
+                exif_ifd.pop(tag, None)
             # These values describe the rendered JPEG, not the capture source.
             exif_ifd[40962] = image.width
             exif_ifd[40963] = image.height
@@ -176,6 +183,11 @@ def restore_technical_metadata(
         thumbnail_buffer = BytesIO()
         thumbnail.save(thumbnail_buffer, format="JPEG", quality=85)
         exif_dict = piexif.load(str(output))
+        exif_dict["GPS"] = {}
+        exif_dict["0th"].pop(XMP_TAG, None)
+        for tag in FORBIDDEN_IDENTITY_TAGS:
+            exif_dict["0th"].pop(tag, None)
+            exif_dict["Exif"].pop(tag, None)
         for tag in (36864, 37121, 37500, 40960, 41728, 41729):
             value = exif_dict["Exif"].get(tag)
             if isinstance(value, tuple) and all(isinstance(item, int) for item in value):

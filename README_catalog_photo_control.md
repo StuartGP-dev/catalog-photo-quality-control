@@ -175,8 +175,9 @@ python -m common.catalog_photo_control.apply_metadata `
 ICC, résolution JFIF, Make, Model, Software et HostComputer sont repris. Le
 script historique restauré produit aussi, pour chaque image, un ensemble
 cohérent de date, objectif, ISO, exposition, ouverture et luminosité. GPS,
-MakerNote et champs propres au fichier de référence restent omis. Pour indexer
-les métadonnées de chaque image d'un variant :
+MakerNote, XMP/InstanceID, ImageUniqueID, CameraOwnerName, BodySerialNumber et
+LensSerialNumber sont supprimés explicitement. Pour indexer les métadonnées de
+chaque image d'un variant :
 
 ```powershell
 python -m common.catalog_photo_control.image_metadata `
